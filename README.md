@@ -1,4 +1,4 @@
-# rag-cli-toolkit
+# rag-data-cleaning
 
 > RAG 数据预处理 —— 把任意格式的原始资料，变成一份统一的 JSON 契约。
 > **一个工具 + 四份 Agent 手册。**
@@ -176,7 +176,7 @@ ragcli parse -f doc.pdf --boilerplate-ratio 0.5 -o out.json         # 调页脚�
 ## 目录结构
 
 ```
-rag-cli-toolkit/
+rag-data-cleaning/
 ├── ragcli/
 │   ├── cli.py                 # CLI 入口
 │   ├── registry.py            # 工具注册（按 ingest/retrieve/evaluate 分阶段）

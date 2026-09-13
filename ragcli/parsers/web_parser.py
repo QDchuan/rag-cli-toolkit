@@ -22,7 +22,7 @@ from ragcli.parsers.base import BaseParser, MissingDependencyError, ParseError, 
 
 _DEFAULT_TIMEOUT = 20
 _DEFAULT_UA = (
-    "Mozilla/5.0 (compatible; ragcli/0.1; +https://github.com/QDchuan/rag-cli-toolkit)"
+    "Mozilla/5.0 (compatible; ragcli/0.1; +https://github.com/QDchuan/rag-data-cleaning)"
 )
 
 
