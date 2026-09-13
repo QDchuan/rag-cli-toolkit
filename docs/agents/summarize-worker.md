@@ -25,12 +25,43 @@ If the answer is "I'd have to open it to know", the summary has failed — no ma
   "budget_version": "v1",
   "max_tokens": 100,          // hard ceiling; the scan cost is corpus_size x this
   "max_topics": 5,
-  "language": "zh",
+  "summary_language": "en",   // the language USERS QUERY IN — see below
   "corpus_size": 1200         // the reason the ceiling is what it is
 }
 ```
 
 **3. The output path** — where to write `doc-summary.json`.
+
+### `summary_language` is not the source language
+
+This is the single most damaging thing you can get wrong after length, and it is
+invisible until someone queries.
+
+The catalogue is matched against **queries**, not against sources. So every
+summary in a corpus must be written in **one** language — the one the users
+query in — regardless of what language each source document happens to be in.
+
+**A mixed-language catalogue is half-broken.** If three documents are summarised
+in English and two in Chinese, a query in either language silently misses part
+of the corpus. Nothing errors. The missed documents simply never come back.
+
+| Source language | `summary_language` | What you write |
+|---|---|---|
+| English | `en` | English summary |
+| Chinese | `en` | **English** summary — you are translating, and that is correct |
+| Mixed | `en` | English summary, keeping proper nouns in their original form |
+
+**When the source is in another language, you are translating on purpose.** That
+feels wasteful — you are compressing *and* converting. It is not: a summary that
+matches the source language instead of the query language is a document nobody
+will ever find.
+
+Keep **proper nouns in their original form** even when translating — product
+names, technical terms, standard numbers, error codes. Translation is for the
+prose, not for the identifiers people actually search on.
+
+If the budget does not specify `summary_language`, **stop and ask** rather than
+picking one. A corpus-level language decision is not yours to make per document.
 
 ### Why the ceiling is not negotiable
 
@@ -193,6 +224,31 @@ validation = {
 
 ## Common Pitfalls
 
+### Pitfall 0: A Mixed-Language Catalogue
+
+**Consequence:** Every summary must be in `budget.summary_language` — the language users *query* in. If workers each follow their source document's language instead, the catalogue ends up with some entries in one language and some in another, and a query in either language silently misses part of the corpus. Nothing errors; the missed documents just never come back.
+
+**Real case:** This was observed on the first real run of this workflow. A four-document English corpus produced two summaries in Chinese and one in English — even though all three source documents were English. Nothing in the manual had specified a language policy, so each worker guessed, and they guessed differently.
+
+The failure is invisible from the outside:
+
+```
+catalogue (3 entries)
+  oauth-guide        summary: 面向公共 API 的 OAuth 2.0 接入参考…      <- Chinese
+  quarterly-metrics  summary: Q1–Q3 季度指标表…                       <- Chinese
+  supplier-policy    summary: March 2024 revision of supplier…        <- English
+```
+
+A query for *"how long do access tokens last"* matches only the English entry, so the OAuth document — which contains the answer — is never selected. The document is in the corpus, correctly chunked, perfectly retrievable by the fine tier, and unreachable by the coarse tier.
+
+**Avoid:**
+- Read `budget.summary_language` and write in exactly that language, even when it differs from the source
+- Record **both** `summary_language` (what you wrote) and `source_language` (what the source was) in `meta`
+- Keep proper nouns in their original form when translating — identifiers, product names, error codes
+- If the budget omits `summary_language`, stop and ask; it is a corpus-level decision, not a per-document one
+
+**How to detect it:** compare `meta.summary_language` across the whole catalogue. Two different values in one corpus is a defect, and a validator is the right place to catch it — not a user whose query quietly under-returns.
+
 ### Pitfall 1: Summaries Too Long
 
 **Consequence:** An engineer maintained a knowledge base with 5,000 documents averaging 2,000 characters each. With summaries averaging 800 characters, total summary storage hit 2.5M characters. When a query retrieved 5 chunks, each carrying its parent doc's verbose summary, the prompt alone consumed 2500+ tokens — far exceeding the body content itself.
@@ -264,13 +320,14 @@ The Sogeti case is about the *bridge* job: a user asked "why did Project Aurora 
   "summary_contract": "1.0",
   "source_id": "report_a1b2c3d4",          // must equal the parsed document's source_id
   "source_path": "raw/report.pdf",
-  "title": "2024 年度供应商管理报告",        // names the document, not its category
-  "summary": "2024 年供应商准入标准调整，新增账期风险条款，附 12 家供应商的合规审计结果与三家降级处理。",
-  "topics": ["供应商准入", "账期风险", "合规审计"],   // 2-5, each specific enough to filter on
+  "title": "2024 Supplier Management Report",   // names the document, not its category
+  "summary": "March 2024 revision of supplier admission standards adds payment-term risk clauses: new applicants need 12 months of settled accounts, terms beyond net-60 need finance-committee sign-off; 12 audited, 3 downgraded.",
+  "topics": ["supplier admission", "payment-term risk", "net-60", "compliance audit"],
   "token_count": 98,                        // real measurement, must be <= budget.max_tokens
   "meta": {
     "doc_type": "report",
-    "language": "zh",
+    "summary_language": "en",               // what you WROTE — must equal budget.summary_language
+    "source_language": "zh",                // what the SOURCE was; may differ, that is fine
     "page_count": 42,
     "model_used": "gpt-4o-mini",
     "temperature": 0.2,
@@ -278,6 +335,8 @@ The Sogeti case is about the *bridge* job: a user asked "why did Project Aurora 
   }
 }
 ```
+
+Note `summary_language` and `source_language` are separate fields on purpose. Recording both makes a mixed-language catalogue visible in the data — if a validator ever sees two different `summary_language` values across one corpus, that is a defect, and it is better caught there than by a user whose query silently returns half the corpus.
 
 ### What the orchestrator does with it
 

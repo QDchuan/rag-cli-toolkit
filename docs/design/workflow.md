@@ -273,7 +273,50 @@ corpus/
 
 ---
 
-## 九、边界
+## 九、实现
+
+工作流由三部分组成：
+
+| 部分 | 是什么 | 在哪 |
+|---|---|---|
+| **调度器** | 确定性的 workflow 脚本 | `workflows/clean-corpus.js` |
+| **worker 手册** | 每个 worker 的判断依据 | `docs/agents/*-worker.md` |
+| **语料级策略** | 切块边界与摘要语言 | `<corpus>/corpus/*.json` |
+
+### 为什么调度器是代码而不是 Agent
+
+「下一步做什么、能不能并行、闸门过没过」都是确定性的。写成提示词有两个后果：不可复现，以及把调度知识塞进一个**本该对格式和切块边界一无所知**的上下文里。
+
+所以 `workflows/clean-corpus.js` 承担编排，它是 DSH `workflow` 工具的脚本体：`parse → 质量闸 → [chunk ∥ summarize] → verify → catalog`。
+
+### 两个从真实运行中学到的约束
+
+**1. 脚本没有 shell，所以每一步都是 `agent()` 调用**
+
+workflow 脚本没有文件系统、网络和 shell，所以连 `ragcli parse` 也得交给一个 agent 去跑。worker 提示词因此保持**极短**——只给任务信封和手册路径，判断依据全在手册里。把手册内容抄进提示词会重新制造这个项目一直在对抗的文档漂移。
+
+**2. 永远不要相信 worker 的自述**
+
+第一次真实运行暴露了这个：两个 worker **把活干对了**（磁盘上 `chunks.json` 和 `doc-summary.json` 都完整有效），但它们的最终 JSON 回复没通过 schema 校验，于是 `agent()` 解析为 null，编排器把两个成功报成了失败——**少报了 3 倍**。
+
+所以脚本不消费 worker 的回复。它在 enrich 之后派一个**独立的 verify agent** 去读文件系统，报告实际存在什么。**catalog 是从核实过的文件内容构建的，不是从 worker 声称的内容。**
+
+### 语料级策略文件
+
+```
+<corpus>/corpus/
+├── summary-budget.json     # 摘要长度上限 + summary_language
+└── chunk-policy.json       # token 区间 / overlap / 保护结构
+```
+
+两份都是**语料级决策**，不是逐文档的：
+
+- `summary_language` 是**用户提问的语言**，不是源文档的语言。混语言的目录是半坏的——用任一语言提问都会静默漏掉一部分语料。第一次真实运行就踩到了：四份英文语料产出两份中文摘要和一份英文摘要，因为手册当时没规定语言策略，每个 worker 各自猜，猜得还不一样。
+- `token_bounds` 由 embedding 模型决定，不该每篇文档重新发明。
+
+---
+
+## 十、边界
 
 ### 做
 
@@ -293,7 +336,7 @@ corpus/
 
 ---
 
-## 十、验收标准
+## 十一、验收标准
 
 工作流跑通的判据，是**两条提问路径都成立**：
 
