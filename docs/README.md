@@ -68,11 +68,14 @@ Earlier revisions mixed a "compose atomic CLI tools" model with an "expert agent
 | Question | The single answer |
 |---|---|
 | Is this a CLI toolkit or an agent system? | **Both, at different layers.** The CLI is the execution layer; agents are the decision layer. |
-| Who decides chunking? | **Chunk Worker writes the script.** `ragcli chunk` is a fallback for simple documents, not the primary path. |
+| How many tools exist? | **One: `parse`.** Eleven others (chunk/tagger/summarize/embed/index/search/…) were removed — written once, never executed, never tested. A tool that has never run is a liability, not an asset. |
+| Who decides chunking? | **Chunk Worker writes the script.** There is no `ragcli chunk`, deliberately — no fixed CLI can express per-document boundary decisions. |
 | Who decides the tag schema? | **The corpus**, not the document. Tagger Worker applies it and proposes changes; it does not invent values. |
 | Is `clean` a step? | **No.** Cleaning runs inside `parse`. There has never been a `clean` command. |
-| How many stages? | **Three:** `ingest` (write path), `retrieve` (read path), `evaluate`. |
-| How many agents? | **One orchestrator + four workers.** `embed`/`index` are tool steps the orchestrator runs directly. |
+| How many stages? | **Three declared:** `ingest` (write path), `retrieve` (read path), `evaluate`. Only `ingest` has a tool. |
+| How many agents? | **One orchestrator + four workers** (parse / chunk / summarize / tagger). |
+
+**Why only `parse` is a tool:** its difficulty is *format handling*, which a library should own. The other stages are difficulty of *judgment* — no fixed command can express them, so the worker writes code. See [`design/architecture.md`](design/architecture.md) §8.
 
 ---
 

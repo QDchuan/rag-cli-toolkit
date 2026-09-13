@@ -44,14 +44,33 @@ raw source
    └─ [tool]   index      → vector store
 ```
 
+### Implementation status — read this before scheduling
+
+Not every step below has a command behind it yet. Know which is which:
+
+| Step | Implementation | How it runs |
+|---|---|---|
+| `parse` | ✅ **`ragcli parse`** | You run it directly |
+| `chunk` | ❌ no tool — by design | Delegate to Chunk Worker, which writes its own script |
+| `summarize` | ❌ no tool — by design | Delegate to Summarize Worker |
+| `tagger` | ❌ no tool — by design | Delegate to Tagger Worker |
+| `embed` | ❌ not built | Out of current scope |
+| `index` | ❌ not built | Out of current scope |
+
+`parse` is the only step with a pre-built command, because it is the only one whose difficulty lies in *format handling* rather than *judgment* — and format handling is exactly what a library should own.
+
+The enrichment steps have no command because no fixed CLI can express their decisions. The workers write code.
+
+`embed` and `index` are not implemented. If your run needs a vector store, that is outside what this toolkit currently provides — say so rather than pretending the step happened.
+
 ### Two kinds of step
 
-| Kind | Steps | Who runs it | Why |
-|---|---|---|---|
-| **Worker step** | `parse`, `chunk`, `summarize`, `tagger` | Delegate to a worker agent | Each needs its own manual and its own context |
-| **Tool step** | `embed`, `index` | **You run it directly** | Deterministic command, no judgment involved |
+| Kind | Steps | Who runs it |
+|---|---|---|
+| **Tool step** | `parse` | **You run it directly** — it is a command |
+| **Worker step** | `chunk`, `summarize`, `tagger` | Delegate to a worker agent — it writes code |
 
-You run tool steps yourself because spinning up an agent to execute `ragcli embed -i x -o y` wastes time and money.
+Run `parse` yourself. Spinning up an agent to execute `ragcli parse -f x -o y` wastes time and money, and the Parse Worker's job is largely to read the warnings and decide whether the result is usable — see its manual for when that warrants escalation.
 
 ---
 

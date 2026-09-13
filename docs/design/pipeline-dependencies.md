@@ -72,27 +72,22 @@ Each row is a *must wait*, not a preference.
 
 ### Group C — summarize ∥ tagger (the big one)
 
-Both depend only on `chunks.json`, neither depends on the other. They typically dominate wall-clock time because both make LLM calls.
+Both depend only on `chunks.json`, neither depends on the other. They typically dominate wall-clock time because both make LLM calls, so overlapping them is the single largest win in the pipeline.
 
-```bash
-# Both read chunks.json, write different outputs — safe to run concurrently
-ragcli summarize -i chunks.json -o summarized.json &
-ragcli tagger    -i chunks.json -o tagged.json --schema schema.json &
-wait
-```
+Both read `chunks.json` and write *different* output files, so there is no write conflict. Spawn both worker sessions, wait for both.
 
 ### Across documents — the bigger one
 
-Documents are fully independent. With 100 documents, the entire pipeline parallelises 100 ways at every stage.
+Documents are fully independent. With 100 documents, the entire pipeline parallelises 100 ways at every stage — and this scales far better than overlapping the two enrichment workers within one document.
 
-```python
-from concurrent.futures import ThreadPoolExecutor
-
-with ThreadPoolExecutor(max_workers=8) as pool:
-    pool.map(ingest_one_document, document_paths)
+```
+for each document, in parallel (capped):
+    parse → chunk → [summarize ∥ tagger]
 ```
 
 **Cap the worker count.** LLM rate limits, not CPU, are the binding constraint. Start at 4–8 and raise only if you see no throttling.
+
+**One run directory per document** (`runs/<source_id>/`) is what makes this safe. Two documents sharing a temp path is the classic source of intermittent, unreproducible corruption.
 
 ### Within a document — do not bother
 

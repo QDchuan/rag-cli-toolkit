@@ -168,10 +168,10 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 |---|---|---|
 | R1 | **一份 MD 覆盖全流程的反模式** | 删除 `data-preprocessing-expert.md`（它引用了根本不存在的 `clean` 工具，且与四份专家手册口径不一） |
 | R2 | **文档给谁看不明确** | `docs/` 拆成 `agents/`（Agent 手册，英文）/ `design/`（设计文档，中文）/ `reference/`（自动生成），并加 `docs/README.md` 文档地图 |
-| R3 | **编排手册与实际拓扑不符** | `orchestrator.md` 重写：4 个 worker（parse/chunk/summarize/tagger）+ 2 个 tool step（embed/index），并明确"永不读 worker 手册" |
+| R3 | **编排手册与实际拓扑不符** | `orchestrator.md` 重写，并明确"永不读 worker 手册"；新增"实现状态"表，逐步骤标注哪些有命令、哪些靠 worker 写代码、哪些未建 |
 | R4 | **Tag Schema 语料级 vs 文档级的边界** | `tagger-worker.md` 加 "What You Receive" 节：Agent **应用**语料级 Schema，**提议**变更但不自行发明值 |
 | R5 | **Chunk 策略 vs 粒度的边界** | `chunk-worker.md` 加 "What You Receive" 节：语料策略定 token 区间/overlap/保护结构，Agent 只定切分策略与边界 |
-| R6 | **Chunk 工具与"专家自己写脚本"的矛盾** | `chunk-worker.md` 明确：三个原语可用，**`ragcli chunk` 只是简单文档的兜底**，专家应自己写脚本 |
+| R6 | **Chunk 工具与"专家自己写脚本"的矛盾** | 彻底消除：`ragcli chunk` 等 **11 个预写工具全部删除**。切块/打标/摘要现在没有任何命令，专家就是写代码 |
 | R7 | **阶段划分按"是不是索引"切不干净** | registry 从 4 阶段（含 `index`）改为 3 阶段：`ingest`（写路径）/ `retrieve`（读路径）/ `evaluate` |
 | R8 | **文档引用了不存在的 `clean` 命令** | `pipeline-dependencies.md` 重写，并说明清洗在 `parse` 内部 |
 | R9 | **CLI 文档与实现漂移** | `reference/cli.md` 改为 `tests/gen_cli_reference.py` 自动生成，禁止手改 |
@@ -266,14 +266,57 @@ Agent 遇到无法表达的内容时，标 `unknown` + 产出**变更提议**，
 
 ---
 
-## 八、一句话总结
+## 八、项目的当前边界
 
-现有资产是**四份高质量 Agent 手册 + 一个可靠的清洗工具 + 清晰的文档分层**。经过本次重构，**Agent 设计层面已经自洽**：拓扑一致、边界明确、手册与实现对齐。
+### 工具层：只有一个工具
 
-剩下缺的全部是**基础设施的工具化**——手册已经描述清楚该做什么，但没有可执行的命令去强制它：
+**`ragcli parse` 是项目里唯一的工具。** 早期铺开的 11 个工具（chunk / tagger / summarize / embed / index / graph / search / hybrid / rerank / cache / evaluate）已全部删除。
 
-- **契约**（怎么交接不出错）→ `ragcli validate`
-- **状态**（崩了怎么续、改了怎么增量）→ `ragcli manifest`
-- **边界**（语料级策略放哪）→ `ragcli schema` / corpus 文件
+删除的理由：**它们从未被执行过一次。** 写完、能 import、但没有任何测试或真实运行证明它们能工作。没运行过的工具不是资产，是伪装成进度的负债。
 
-Agent 设计上，核心是那个区分：**Type A 做薄（工具操作），Type B 做厚（判断），两者用独立 session 严格隔离。**
+### 为什么只有 parse 值得做成工具
+
+因为只有它的难点在**格式处理**，而格式处理正是库该负责的事：
+
+| | 难点在哪 | 该不该做成工具 |
+|---|---|---|
+| `parse` | PDF 多栏、合并单元格、OCR 版面、编码探测 | ✅ 该——成熟库已解决，包一层即可 |
+| `chunk` | **判断**：这份文档哪里能切、哪里不能切 | ❌ 不该——没有固定 CLI 能表达 |
+| `summarize` | **判断**：要不要做、多长、什么风格 | ❌ 不该 |
+| `tagger` | **判断**：语料级 Schema 怎么定 | ❌ 不该 |
+
+所以现在的分工是干净的：
+
+```
+parse        →  有命令，因为它是"格式问题"
+chunk/tagger/summarize  →  没有命令，因为是"判断问题"，专家写代码
+```
+
+### 缺口清单需要相应重读
+
+第五节的 P0/P1/P2 里，"契约"、"Manifest"、"质量门" 这些项，**服务对象从 12 个工具缩小到了 1 个**。这既让它们更容易做，也让其中一部分不再紧急：
+
+| 项 | 现在的状态 |
+|---|---|
+| P0-1 契约 | 仍需要，但只针对 `parsed.json` 一种 artifact + 三个 worker 的输出 |
+| P0-2 Manifest | 仍需要——编排器依然要记录状态与决策 |
+| P0-3 语料级 Schema | 仍需要——Tagger Worker 必须有地方存 Schema |
+| P1-4 质量门 | 仍需要，但断言写在**手册**里由 worker 自查，而非 `ragcli validate` |
+| P1-6 增量更新 | 仍需要 |
+| P1-7 Embedding 一致性 | **暂时搁置**——embed 不在范围内 |
+
+---
+
+## 九、一句话总结
+
+现有资产是：**一个真正可靠的解析/清洗引擎 + 四份 Agent 手册 + 清晰的文档分层**。
+
+经过两轮整理，**设计层面已经自洽**：只有一个工具、四份手册各管一段、边界（语料级 vs 文档级）写明、实现状态逐项标注。
+
+剩下缺的是**让手工流程可复现的基础设施**：
+
+- **契约**（`parsed.json` 与三个 worker 输出的确切 schema）
+- **状态**（manifest：崩了怎么续、决策怎么留痕）
+- **边界**（语料级 Schema / 策略文件放在哪）
+
+Agent 设计上，核心是那个区分：**能写成固定命令的做薄（parse），需要判断的做厚（三个 worker），两者用独立 session 严格隔离。**

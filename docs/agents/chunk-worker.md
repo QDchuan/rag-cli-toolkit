@@ -44,31 +44,42 @@ If the policy and your judgment conflict, **the policy wins**. If the policy mak
 
 ---
 
-## Available Primitives
+## Write Your Own Script
 
-You are expected to **write your own chunking script**. The three primitives below exist so you do not rewrite regex splitting and token counting; they are building blocks, not the answer.
+**There is no `ragcli chunk` command, and that is deliberate.** No fixed CLI can express the boundary decisions this job requires — a 400-page manual with nested tables, code fences, and a two-column appendix needs logic driven by *that document's* structure, not by a flag.
 
-| Primitive | What it gives you |
+Your job is to read the parsed sections, decide the boundaries, and write the code that executes that decision.
+
+What you have available:
+
+| Tool | What it gives you |
 |---|---|
-| `ragcli.tools.chunk.chunk_recursive(text, chunk_size, chunk_overlap, separators)` | Coarse-to-fine separator splitting |
-| `ragcli.tools.chunk.chunk_by_headers(text, headers)` | Heading-boundary splitting |
 | `tiktoken.get_encoding("cl100k_base")` | Real token counting, not character counting |
-
-There is also `ragcli chunk` as a CLI. **Treat it as a fallback for simple documents, not as your primary path** — it implements only two fixed strategies and cannot express document-specific boundary logic. A 400-page manual with nested tables and code fences needs logic that no fixed CLI flag can describe.
+| The standard library | `re`, `json`, `pathlib` — most custom splitting is regex plus arithmetic |
+| Any chunking library you judge appropriate | LangChain splitters, `semantic-text-splitter`, etc. — your call |
 
 ```python
-# Import the primitives rather than shelling out, when you need custom logic
-import sys; sys.path.insert(0, "<repo root>")
-from ragcli.tools.chunk import chunk_by_headers, chunk_recursive
+import json, re, hashlib
+from pathlib import Path
 import tiktoken
 
 enc = tiktoken.get_encoding("cl100k_base")
-def tokens(s): return len(enc.encode(s))
+tokens = lambda s: len(enc.encode(s))
 
-# ... your document-specific strategy here
+parsed = json.loads(Path("parsed.json").read_text(encoding="utf-8"))
+
+# ... your document-specific strategy here:
+#   - which sections must stay whole
+#   - where the safe boundaries are
+#   - how to carry heading_path onto each chunk
+
+Path("chunks.json").write_text(json.dumps(artifact, ensure_ascii=False, indent=2),
+                               encoding="utf-8", newline="\n")
 ```
 
-**Write the script to the run directory** so the exact logic used is preserved alongside the artifact. A chunk set with no record of how it was produced is unreproducible.
+**Write the script into the run directory** (`runs/<source_id>/chunk.py`) so the exact logic used is preserved next to the artifact it produced. A chunk set with no record of how it was made cannot be reproduced, and you will need to reproduce it — the same document re-ingested in six months must yield the same chunks.
+
+Record what you decided in `stats.decision` (strategy, token bounds, any special cases). The orchestrator copies that into the manifest.
 
 ---
 
