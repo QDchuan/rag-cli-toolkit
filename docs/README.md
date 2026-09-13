@@ -20,19 +20,18 @@ There are **two audiences**, and mixing them is what made this project confusing
 
 ## `agents/` — Operating Instructions for Agents
 
-Each file is injected into **exactly one** agent, in a **fresh session**. Never two at once — that is the context-pollution failure this structure exists to prevent.
+Each manual is injected into **exactly one** agent, in a **fresh session**. Never two at once — that is the context-pollution failure this structure exists to prevent.
 
 | File | Held by | Language |
 |---|---|---|
-| [`orchestrator.md`](agents/orchestrator.md) | Orchestrator | English |
-| [`parse-worker.md`](agents/parse-worker.md) · [中文](agents/parse-worker.zh.md) | Parse Worker | EN + ZH |
-| [`chunk-worker.md`](agents/chunk-worker.md) · [中文](agents/chunk-worker.zh.md) | Chunk Worker | EN + ZH |
-| [`summarize-worker.md`](agents/summarize-worker.md) · [中文](agents/summarize-worker.zh.md) | Summarize Worker | EN + ZH |
-| [`tagger-worker.md`](agents/tagger-worker.md) · [中文](agents/tagger-worker.zh.md) | Tagger Worker | EN + ZH |
+| [`parse-worker.zh.md`](agents/parse-worker.zh.md) | Parse Worker | 中文 |
+| [`chunk-worker.zh.md`](agents/chunk-worker.zh.md) | Chunk Worker | 中文 |
+| [`summarize-worker.zh.md`](agents/summarize-worker.zh.md) | Summarize Worker | 中文 |
+| [`tagger-worker.zh.md`](agents/tagger-worker.zh.md) | Tagger Worker | 中文 |
 
-**English is the primary version** — agents follow English instructions more reliably and it costs fewer tokens. The `.zh.md` copies exist for human review of what the agent was actually told.
+**Manuals are Chinese-only, deliberately.** They were previously bilingual, and the Chinese copies silently drifted onto an outdated mental model — worse than having no copy, because a reviewer reads the translation believing they are checking the original. One version means drift is impossible.
 
-**The orchestrator reads only its own file.** It knows the four workers by name and by the artifact they exchange. It must never read a worker manual.
+**There is no orchestrator manual.** The orchestrator is [`workflows/clean-corpus.js`](../workflows/clean-corpus.js) — it is code, because scheduling is deterministic. Adding a prose manual back would recreate the non-reproducibility the script exists to remove.
 
 ---
 

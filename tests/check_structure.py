@@ -14,6 +14,7 @@ caught rather than rediscovered:
 Run: python tests/check_structure.py
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -50,38 +51,55 @@ check(
 )
 
 # ── 3. Agent docs ─────────────────────────────────────────────────────────
+# The manuals are Chinese-only by decision. English copies were removed because
+# maintaining two versions of every manual is how the Chinese ones drifted onto
+# a stale mental model once already — the copy silently stopped matching.
 REQUIRED_AGENT_DOCS = [
-    "orchestrator.md",
-    "parse-worker.md", "parse-worker.zh.md",
-    "chunk-worker.md", "chunk-worker.zh.md",
-    "summarize-worker.md", "summarize-worker.zh.md",
-    "tagger-worker.md", "tagger-worker.zh.md",
+    "parse-worker.zh.md",
+    "chunk-worker.zh.md",
+    "summarize-worker.zh.md",
+    "tagger-worker.zh.md",
 ]
 for name in REQUIRED_AGENT_DOCS:
     check(f"agent doc exists: {name}", (AGENTS / name).is_file())
 
-for name in ["architecture.md", "pipeline-dependencies.md"]:
+# The orchestrator is no longer a manual: the workflow script IS the
+# orchestrator, and it lives in workflows/ where it can actually be executed.
+check("orchestrator manual is gone (the workflow script replaces it)",
+      not (AGENTS / "orchestrator.md").exists())
+
+for name in ["architecture.md", "pipeline-dependencies.md", "workflow.md"]:
     check(f"design doc in design/: {name}", (DOCS / "design" / name).is_file())
 
 # ── 4. No agent doc links into design/ ────────────────────────────────────
 polluted = [p.name for p in AGENTS.glob("*.md") if "design/" in p.read_text(encoding="utf-8")]
 check("no agent doc links to design/", not polluted, f"polluted: {polluted}")
 
-# ── 5. Orchestrator names worker manuals only to forbid them ──────────────
-orch = (AGENTS / "orchestrator.md").read_text(encoding="utf-8")
-manual_names = ["chunk-worker.md", "tagger-worker.md", "summarize-worker.md", "parse-worker.md"]
-offending = []
-for line in orch.split("\n"):
-    if any(n in line for n in manual_names):
-        low = line.lower()
-        if "never read" in low or "不读" in line:
-            continue
-        offending.append(line.strip()[:80])
-check(
-    "orchestrator mentions worker manuals only to forbid reading them",
-    not offending,
-    str(offending)[:160],
-)
+# ── 5. English manuals stay deleted ───────────────────────────────────────
+ENGLISH_MANUALS = [
+    "orchestrator.md",
+    "parse-worker.md",
+    "chunk-worker.md",
+    "summarize-worker.md",
+    "tagger-worker.md",
+]
+lingering = [n for n in ENGLISH_MANUALS if (AGENTS / n).exists()]
+check("English manuals stay deleted", not lingering, f"present: {lingering}")
+
+
+# ── 5b. The workflow script points at manuals that exist ──────────────────
+# This is the functional half of the same decision: deleting the English files
+# without repointing the script would break every run at prompt-build time.
+workflow_script = ROOT / "workflows" / "clean-corpus.js"
+check("workflow script exists", workflow_script.is_file())
+if workflow_script.is_file():
+    script_text = workflow_script.read_text(encoding="utf-8")
+    referenced = re.findall(r'manual\("([^"]+)"\)', script_text)
+    check("workflow script references at least one manual", len(referenced) > 0, str(referenced))
+    for ref in referenced:
+        check(f"workflow script's manual exists: {ref}", (AGENTS / ref).is_file())
+    stale_refs = [m for m in ENGLISH_MANUALS if f'"{m}"' in script_text]
+    check("workflow script has no stale manual references", not stale_refs, str(stale_refs))
 
 # ── 6. Registry matches modules on disk ───────────────────────────────────
 import ragcli.tools as pkg  # noqa: E402
@@ -138,8 +156,6 @@ RETIRED_FIELDS = ["doc_id", "header_path", "summarized.json", "tagged.json"]
 manual_dir = DOCS / "agents"
 field_regressions: list[str] = []
 for manual in sorted(manual_dir.glob("*.md")):
-    if manual.name == "orchestrator.md":
-        continue  # the orchestrator deliberately does not know field names
     for lineno, line in enumerate(manual.read_text(encoding="utf-8").split("\n"), 1):
         for retired in RETIRED_FIELDS:
             if f'"{retired}"' in line or f"`{retired}`" in line:
@@ -152,37 +168,37 @@ check(
 )
 
 # ── 10. The coarse tier is described as retrieval, not as context ─────────
-summ = (manual_dir / "summarize-worker.md").read_text(encoding="utf-8")
+summ = (manual_dir / "summarize-worker.zh.md").read_text(encoding="utf-8")
 check(
     "summarize manual no longer claims summaries are unused for retrieval",
-    "not embedded or used for retrieval" not in summ,
+    "不参与向量检索" not in summ,
     "the old (wrong) claim is still present",
 )
 check(
     "summarize manual describes the coarse tier",
-    "coarse" in summ.lower() and "catalogue" in summ.lower(),
+    "粗层" in summ and "目录" in summ,
     "missing the two-tier framing",
 )
 check(
     "summarize manual covers every document (no skip case)",
-    "no exceptions" in summ.lower() or "every document" in summ.lower(),
+    "没有例外" in summ or "每份文档" in summ,
     "the 'skip short documents' rule may have returned",
 )
 
-chunk = (manual_dir / "chunk-worker.md").read_text(encoding="utf-8")
+chunk = (manual_dir / "chunk-worker.zh.md").read_text(encoding="utf-8")
 check(
     "chunk manual states the source_id linkage rule",
-    "source_id" in chunk and "verbatim" in chunk.lower(),
+    "source_id" in chunk and ("原样" in chunk or "verbatim" in chunk.lower()),
     "missing the source_id linkage requirement",
 )
 check(
     "chunk manual says heading_path is an array",
-    "ARRAY" in chunk or "array, not a string" in chunk.lower(),
+    "数组" in chunk,
     "missing the heading_path type rule",
 )
 check(
     "chunk manual requires stating a decision",
-    "stats.decision" in chunk,
+    "stats.decision" in chunk or "decision" in chunk,
     "missing the reproducibility requirement",
 )
 
@@ -200,8 +216,6 @@ if wf.is_file():
 # The .zh.md copies exist so a human can review what the agent was told. When
 # they drift they are worse than useless: the reviewer reads a stale mental
 # model and approves it. This check makes drift detectable at the heading level.
-import re
-
 _HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
 
 

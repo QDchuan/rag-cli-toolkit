@@ -164,7 +164,7 @@ log(`run root: ${runRoot}`);
 // The ingest agent is the one place that knows about formats, and the only
 // place that runs a deterministic command. It is thin: run parse, split the
 // batch output into per-document run directories, report verdicts.
-const ingestPrompt = `${manual("parse-worker.md")}
+const ingestPrompt = `${manual("parse-worker.zh.md")}
 
 # Task
 
@@ -250,7 +250,7 @@ if (!deliverable.length) {
 
 phase("enrich");
 
-const chunkPrompt = (d) => `${manual("chunk-worker.md")}
+const chunkPrompt = (d) => `${manual("chunk-worker.zh.md")}
 
 # Task
 
@@ -271,7 +271,7 @@ Read the policy file and stay inside its bounds. Write your script to
   "chunk_count": 0, "strategy": "...", "warnings": [] }
 ${REPLY}`;
 
-const summaryPrompt = (d) => `${manual("summarize-worker.md")}
+const summaryPrompt = (d) => `${manual("summarize-worker.zh.md")}
 
 # Task
 
@@ -378,21 +378,60 @@ const verification = await agent(verifyPrompt, {
   phase: "verify",
 });
 
-if (!verification || !Array.isArray(verification.documents)) {
-  throw new Error("verifier returned no document list");
+// The verifier is a REPORT, not a gate.
+//
+// A schema-valid reply is the preferred path, but it is not the only evidence
+// that the work landed — the artifacts themselves are. Across real runs, three
+// separate agents completed their work correctly and then failed to return a
+// schema-valid envelope (once two enrich workers, once the verifier). Treating
+// that as failure makes the orchestrator report the opposite of the truth.
+//
+// So: when the verifier replies, its findings are authoritative — it reads the
+// filesystem, including fields a worker may have fumbled. When it does not,
+// fall back to the workers' own replies and mark the run UNVERIFIED, so the
+// caller knows to inspect rather than being told a comfortable lie.
+const verifiedDocs = Array.isArray(verification && verification.documents)
+  ? verification.documents
+  : null;
+
+let ok;
+let partial;
+let verificationState;
+
+if (verifiedDocs) {
+  ok = verifiedDocs.filter((v) => v.chunks_ok && v.summary_ok);
+  partial = verifiedDocs.filter((v) => !(v.chunks_ok && v.summary_ok));
+  verificationState = "verified";
+} else {
+  const repliedIds = new Set(replied.map((e) => (e && e.doc ? e.doc.source_id : "")));
+  ok = deliverable
+    .filter((d) => repliedIds.has(d.source_id))
+    .map((d) => {
+      const e = replied.find((x) => x && x.doc && x.doc.source_id === d.source_id);
+      return {
+        source_id: d.source_id,
+        chunks_ok: true,
+        summary_ok: true,
+        chunk_count: e.chunked.chunk_count,
+        title: e.summarized.title,
+        summary: e.summarized.summary,
+        topics: e.summarized.topics,
+        token_count: e.summarized.token_count || 0,
+        summary_language: "",
+        problems: [],
+      };
+    });
+  partial = deliverable
+    .filter((d) => !repliedIds.has(d.source_id))
+    .map((d) => ({ source_id: d.source_id, problems: ["no worker reply and no verification"] }));
+  verificationState = "unverified-fallback";
+  log(
+    "WARNING: the verifier returned no usable report; falling back to worker replies. " +
+      "The catalogue below is UNVERIFIED — inspect the artifacts before trusting it.",
+  );
 }
 
-// The verifier is authoritative. A worker that fumbled its reply but wrote
-// correct artifacts counts as a success; a worker that replied cleanly but
-// wrote nothing counts as a failure.
-const ok = verification.documents.filter((v) => v.chunks_ok && v.summary_ok);
-const partial = verification.documents.filter((v) => !(v.chunks_ok && v.summary_ok));
 const incompleteIds = partial.map((v) => v.source_id);
-
-const claimedButFailed = ok.filter((v) => !enriched.some((e) => e && e.doc && e.doc.source_id === v.source_id));
-if (claimedButFailed.length) {
-  log(`note: ${claimedButFailed.length} document(s) fumbled their reply but produced valid artifacts — counted as success`);
-}
 for (const v of partial) {
   log(`  incomplete: ${v.source_id} — ${(v.problems || []).join("; ") || "unknown"}`);
 }
@@ -401,12 +440,13 @@ if (!ok.length) {
   return {
     corpus,
     run_root: runRoot,
-    documents: { found: all.length, deliverable: deliverable.length, blocked: blocked.length, enriched: 0 },
+    documents: { found: all.length, deliverable: deliverable.length, blocked: blocked.length, verified_complete: 0 },
     blocked: blockedReport,
     incomplete: incompleteIds,
+    verification: verificationState,
     catalog: null,
     notes: ingested.notes || [],
-    warning: "verification found no complete artifacts — no catalogue written",
+    warning: "no complete artifacts — no catalogue written",
   };
 }
 
@@ -514,11 +554,15 @@ return {
     source_id: v.source_id,
     problems: v.problems || [],
   })),
+  verification: verificationState,
   catalog,
   notes: ingested.notes || [],
   execution_notes: [
+    ...(verificationState === "unverified-fallback"
+      ? ["the verifier returned no usable report — this catalogue is UNVERIFIED, inspect the artifacts"]
+      : []),
     ...(replyGap
-      ? [`${replyGap} worker reply(ies) did not satisfy the reply schema; the artifacts were verified on disk instead`]
+      ? [`${replyGap} worker reply(ies) did not satisfy the reply schema; artifacts were verified on disk instead`]
       : []),
     ...(languageWarning ? [languageWarning] : []),
   ],

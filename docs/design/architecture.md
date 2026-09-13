@@ -1,7 +1,7 @@
 # 数据预处理阶段 — 架构设计
 
 > 本文档回答三个问题：架构怎么设计、Agent 怎么设计、还缺什么。
-> 读者是项目决策者，不是 Agent——Agent 手册在 `parse-worker.md` / `chunk-worker.md` / `tagger-worker.md` / `summarize-worker.md`。
+> 读者是项目决策者，不是 Agent——Agent 手册在 `parse-worker.zh.md` / `chunk-worker.zh.md` / `tagger-worker.zh.md` / `summarize-worker.zh.md`。
 
 ---
 
@@ -21,9 +21,9 @@
 
 **为什么这个区分重要：**
 
-`parse-worker.md` 现在写得像决策框架，其实它应该是操作手册——因为真正的脏活（PDF 多栏、合并单元格、OCR 版面）都被 `ragcli parse` 封装了，Agent 不需要"判断"，只需要"正确调用"。
+`parse-worker.zh.md` 现在写得像决策框架，其实它应该是操作手册——因为真正的脏活（PDF 多栏、合并单元格、OCR 版面）都被 `ragcli parse` 封装了，Agent 不需要"判断"，只需要"正确调用"。
 
-而 `chunk-worker.md` 反过来——它必须是决策框架，因为没有工具能替 Agent 决定"这份 API 文档该不该切"。你也明确说过：**切块专家得自己写脚本**。
+而 `chunk-worker.zh.md` 反过来——它必须是决策框架，因为没有工具能替 Agent 决定"这份 API 文档该不该切"。你也明确说过：**切块专家得自己写脚本**。
 
 → **结论：Type A 的 Agent 可以做得很薄（甚至可以退化成纯代码，不需要 LLM）；Type B 的 Agent 必须是完整的、有独立上下文的推理单元。**
 
@@ -168,9 +168,9 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 |---|---|---|
 | R1 | **一份 MD 覆盖全流程的反模式** | 删除 `data-preprocessing-expert.md`（它引用了根本不存在的 `clean` 工具，且与四份专家手册口径不一） |
 | R2 | **文档给谁看不明确** | `docs/` 拆成 `agents/`（Agent 手册，英文）/ `design/`（设计文档，中文）/ `reference/`（自动生成），并加 `docs/README.md` 文档地图 |
-| R3 | **编排手册与实际拓扑不符** | `orchestrator.md` 重写，并明确"永不读 worker 手册"；新增"实现状态"表，逐步骤标注哪些有命令、哪些靠 worker 写代码、哪些未建 |
-| R4 | **Tag Schema 语料级 vs 文档级的边界** | `tagger-worker.md` 加 "What You Receive" 节：Agent **应用**语料级 Schema，**提议**变更但不自行发明值 |
-| R5 | **Chunk 策略 vs 粒度的边界** | `chunk-worker.md` 加 "What You Receive" 节：语料策略定 token 区间/overlap/保护结构，Agent 只定切分策略与边界 |
+| R3 | **编排手册与实际拓扑不符** | `workflows/clean-corpus.js` 重写，并明确"永不读 worker 手册"；新增"实现状态"表，逐步骤标注哪些有命令、哪些靠 worker 写代码、哪些未建 |
+| R4 | **Tag Schema 语料级 vs 文档级的边界** | `tagger-worker.zh.md` 加 "What You Receive" 节：Agent **应用**语料级 Schema，**提议**变更但不自行发明值 |
+| R5 | **Chunk 策略 vs 粒度的边界** | `chunk-worker.zh.md` 加 "What You Receive" 节：语料策略定 token 区间/overlap/保护结构，Agent 只定切分策略与边界 |
 | R6 | **Chunk 工具与"专家自己写脚本"的矛盾** | 彻底消除：`ragcli chunk` 等 **11 个预写工具全部删除**。切块/打标/摘要现在没有任何命令，专家就是写代码 |
 | R7 | **阶段划分按"是不是索引"切不干净** | registry 从 4 阶段（含 `index`）改为 3 阶段：`ingest`（写路径）/ `retrieve`（读路径）/ `evaluate` |
 | R8 | **文档引用了不存在的 `clean` 命令** | `pipeline-dependencies.md` 重写，并说明清洗在 `parse` 内部 |
@@ -181,10 +181,10 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 | # | 项 | 怎么解决的 |
 |---|---|---|
 | R10 | **仓库名与实际不符** | `rag-cli-toolkit` → **`rag-data-cleaning`**。旧名描述的是"一堆命令行工具"，会把设计不断往"加工具"的方向带偏 |
-| R11 | **摘要的定位搞反了** ⭐ | `summarize-worker.md` 里写着"摘要不用于检索"；实际它是**检索的粗层**。已重写：每篇一份、可被批量扫读、是**过滤器**而非描述 |
+| R11 | **摘要的定位搞反了** ⭐ | `summarize-worker.zh.md` 里写着"摘要不用于检索"；实际它是**检索的粗层**。已重写：每篇一份、可被批量扫读、是**过滤器**而非描述 |
 | R12 | **chunk 级摘要与文档级摘要混为一谈** | 明确**只做文档级**。chunk 自带正文可供匹配，再叠一层摘要既增成本又与自己职责重叠 |
 | R13 | **三套字段命名互不相同** | 统一为 `parse` 的命名：`source_id` / `source_path` / `heading_path`（数组）/ `chunk_id`。三份手册全部改正 |
-| R14 | **两段式检索路径没有契约保障** | `chunk-worker.md` 明确：`source_id` 必须**原样复制**，它是 chunk 与摘要之间的唯一链接 |
+| R14 | **两段式检索路径没有契约保障** | `chunk-worker.zh.md` 明确：`source_id` 必须**原样复制**，它是 chunk 与摘要之间的唯一链接 |
 | R15 | **解析会静默失败** ⭐ | `parse` 新增 `verdict`（ok / degraded / unusable）。扫描件缺 OCR 会产出 0 section 且不报错——**看起来正常的空文档比明显失败的更糟** |
 | R16 | **缺少完整工作流规范** | 新增 `docs/design/workflow.md`：阶段、两层产物、质量分流、语料级策略、摘要预算算术、验收标准 |
 | R17 | **中文副本会静默过时** | 三份 `.zh.md` 曾停留在旧的错误模型上（比没有更糟：审阅者读的是过时心智模型）。已同步，并加**标题结构一致性检查**防止再次漂移 |
@@ -195,7 +195,7 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 | # | 缺什么 | 为什么致命 | 建议 |
 |---|---|---|---|
 | 1 | **正式的 Artifact 契约（JSON Schema）** | 各手册现在用散文描述输出格式；Chunk 输出加字段、Tagger 没预期 → **静默错位**。语义已经在手册里写明，但**没有可执行的校验** | 建 `contracts/` 目录，每个 artifact 一份 JSON Schema + 版本号；加 `ragcli validate --stage chunk` |
-| 2 | **Manifest / 状态机** | 崩了就重来，无法增量，无法审计 | 结构已在 `orchestrator.md` 定义，但**没有实现**；做成 `ragcli manifest init/show/update` |
+| 2 | **Manifest / 状态机** | 崩了就重来，无法增量，无法审计 | 结构已在 `workflows/clean-corpus.js` 定义，但**没有实现**；做成 `ragcli manifest init/show/update` |
 | 3 | **语料级 Schema / 策略的存放（工具侧）** | 手册已要求 Agent"应用而非发明"，但**没有地方存放 Schema 和策略文件**，也没有 `ragcli schema` | 建 `corpus/schema.json` + `corpus/chunk-policy.json` + 校验命令 |
 
 ### 🟡 P1 — 生产环境必需
@@ -203,7 +203,7 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 | # | 缺什么 | 问题 | 建议 |
 |---|---|---|---|
 | 4 | **阶段间质量门（工具侧）** | 手册列了断言，但没有**执行者** | 每阶段断言做成 `ragcli validate --stage X`，失败打回上一阶段 |
-| 5 | **语料级去重** | `chunk-worker.md` 讲了近重复检测（按 heading path scope），但没有东西负责执行 | 加 corpus-level dedup 步骤，独立于单文档管线 |
+| 5 | **语料级去重** | `chunk-worker.zh.md` 讲了近重复检测（按 heading path scope），但没有东西负责执行 | 加 corpus-level dedup 步骤，独立于单文档管线 |
 | 6 | **增量更新** | 文档改了 → 全量重跑还是只更新变化部分？ | 用 `source_hash` 判断；文档级变更 → 整篇重跑；语料级 Schema 变更 → 只重跑 tagger |
 | 7 | **Embedding 模型一致性约束** | embed 和 search 必须同模型；chunk 大小要适配模型 token 上限。跨 Agent 无人保证 | 建模型注册表，embed 时把模型名+维度写进 artifact，index/search 校验一致 |
 
@@ -231,7 +231,7 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 └── entities 提取规则         └── 它提到哪些实体
 ```
 
-**已落地**：`tagger-worker.md` 的 "Your default job: APPLY the schema, not invent one" 一节。
+**已落地**：`tagger-worker.zh.md` 的 "Your default job: APPLY the schema, not invent one" 一节。
 Agent 遇到无法表达的内容时，标 `unknown` + 产出**变更提议**，绝不自行发明枚举值。
 
 **仍缺**：存放 Schema 的地方，以及 `ragcli schema` 命令（见 P0-3）。
@@ -247,7 +247,7 @@ Agent 遇到无法表达的内容时，标 `unknown` + 产出**变更提议**，
 └── 必须携带的元数据字段
 ```
 
-**已落地**：`chunk-worker.md` 的 "Policy vs judgment — the line you must not cross" 一节。
+**已落地**：`chunk-worker.zh.md` 的 "Policy vs judgment — the line you must not cross" 一节。
 冲突时策略优先；策略导致某文档无法正确切分时，报为策略缺口而不是静默越界。
 
 **仍缺**：策略文件的存放与加载（同 P0-3）。

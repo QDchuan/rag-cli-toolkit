@@ -61,7 +61,7 @@
 
 所以分工是干净的：**格式问题做成命令，判断问题交给 Agent 写代码。**
 
-这也是为什么 `docs/agents/chunk-worker.md` 让专家"自己写切块脚本"——因为切块决策本质上不可参数化。
+这也是为什么 `docs/agents/chunk-worker.zh.md` 让专家"自己写切块脚本"——因为切块决策本质上不可参数化。
 
 ---
 
@@ -239,14 +239,16 @@ rag-data-cleaning/
 
 | 文档 | 读者 |
 |---|---|
-| [docs/agents/orchestrator.md](docs/agents/orchestrator.md) | 编排 Agent |
-| [docs/agents/parse-worker.md](docs/agents/parse-worker.md) · [中文](docs/agents/parse-worker.zh.md) | 解析 Agent |
-| [docs/agents/chunk-worker.md](docs/agents/chunk-worker.md) · [中文](docs/agents/chunk-worker.zh.md) | 切块 Agent |
-| [docs/agents/summarize-worker.md](docs/agents/summarize-worker.md) · [中文](docs/agents/summarize-worker.zh.md) | 摘要 Agent |
-| [docs/agents/tagger-worker.md](docs/agents/tagger-worker.md) · [中文](docs/agents/tagger-worker.zh.md) | 标签 Agent |
+| [docs/agents/parse-worker.zh.md](docs/agents/parse-worker.zh.md) | 解析 Agent |
+| [docs/agents/chunk-worker.zh.md](docs/agents/chunk-worker.zh.md) | 切块 Agent |
+| [docs/agents/summarize-worker.zh.md](docs/agents/summarize-worker.zh.md) | 摘要 Agent |
+| [docs/agents/tagger-worker.zh.md](docs/agents/tagger-worker.zh.md) | 标签 Agent |
+| [docs/design/workflow.md](docs/design/workflow.md) | 人（工作流规范：阶段、两层产物、验收）+ 编排器（`workflows/clean-corpus.js`） |
 | [docs/design/architecture.md](docs/design/architecture.md) | 人（架构、边界、缺口） |
 | [docs/design/pipeline-dependencies.md](docs/design/pipeline-dependencies.md) | 人（时序、并行、并发陷阱） |
 | [docs/reference/cli.md](docs/reference/cli.md) | 自动生成 |
+
+> Agent 手册**只有中文版**。此前中英双份并存，结果中文版悄悄停在了旧的心智模型上——副本比没有更糟，因为审阅者读的是过时内容却以为在核对。现在只有一份，不存在漂移。
 
 ---
 
