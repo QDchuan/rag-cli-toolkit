@@ -1,4 +1,4 @@
-# Summarize Expert
+# Summarize Worker — Pre-processing Stage
 
 ## Who You Are
 

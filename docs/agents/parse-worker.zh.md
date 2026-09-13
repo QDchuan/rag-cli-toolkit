@@ -26,11 +26,11 @@
 
 ```jsonc
 {
-  "source_id": "chunk-expert_feba053b",   // 稳定：重复摄入会覆盖而非重复
-  "source_path": "docs/chunk-expert.md",
+  "source_id": "api-guide_feba053b",   // 稳定：重复摄入会覆盖而非重复
+  "source_path": "docs/chunk-worker.md",
   "format_type": "md",
   "meta": {
-    "title": "chunk-expert",
+    "title": "api-guide",
     "word_count": 2016,
     "page_count": 3            // 适用时才有
   },

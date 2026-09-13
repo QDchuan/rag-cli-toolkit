@@ -13,6 +13,8 @@ SUITES = [
     ("smoke", HERE / "smoke_parse.py", "Contract, cleaning, error handling"),
     ("integration", HERE / "integration_office.py", "Real DOCX/XLSX/PDF extraction"),
     ("web", HERE / "web_check.py", "HTML/URL extraction (network optional)"),
+    ("docs", HERE / "check_doc_links.py", "Doc links and stale references"),
+    ("structure", HERE / "check_structure.py", "Stage layout, agent docs, registry consistency"),
 ]
 
 

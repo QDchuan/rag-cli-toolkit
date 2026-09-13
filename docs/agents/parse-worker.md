@@ -1,4 +1,4 @@
-# Parse Expert — Data Pre-processing Stage
+# Parse Worker — Pre-processing Stage
 
 ## Who You Are
 
@@ -26,11 +26,11 @@ Every parse — DOCX, PDF, CSV, URL, PNG — returns exactly this:
 
 ```jsonc
 {
-  "source_id": "chunk-expert_feba053b",   // stable: re-ingest overwrites, never duplicates
-  "source_path": "docs/chunk-expert.md",
+  "source_id": "api-guide_feba053b",   // stable: re-ingest overwrites, never duplicates
+  "source_path": "docs/chunk-worker.md",
   "format_type": "md",
   "meta": {
-    "title": "chunk-expert",
+    "title": "api-guide",
     "word_count": 2016,
     "page_count": 3            // when applicable
   },

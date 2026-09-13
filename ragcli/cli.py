@@ -41,7 +41,7 @@ def main():
     list_parser = subparsers.add_parser("list", help="List all available tools")
     list_parser.add_argument(
         "--stage",
-        choices=["ingest", "index", "retrieve", "evaluate"],
+        choices=["ingest", "retrieve", "evaluate"],
         help="Only show tools belonging to this pipeline stage",
     )
     list_parser.set_defaults(func=cmd_list)

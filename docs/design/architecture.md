@@ -1,7 +1,7 @@
 # 数据预处理阶段 — 架构设计
 
 > 本文档回答三个问题：架构怎么设计、Agent 怎么设计、还缺什么。
-> 读者是项目决策者，不是 Agent——Agent 手册在 `parse-expert.md` / `chunk-expert.md` / `tagger-expert.md` / `summarize-expert.md`。
+> 读者是项目决策者，不是 Agent——Agent 手册在 `parse-worker.md` / `chunk-worker.md` / `tagger-worker.md` / `summarize-worker.md`。
 
 ---
 
@@ -21,9 +21,9 @@
 
 **为什么这个区分重要：**
 
-`parse-expert.md` 现在写得像决策框架，其实它应该是操作手册——因为真正的脏活（PDF 多栏、合并单元格、OCR 版面）都被 `ragcli parse` 封装了，Agent 不需要"判断"，只需要"正确调用"。
+`parse-worker.md` 现在写得像决策框架，其实它应该是操作手册——因为真正的脏活（PDF 多栏、合并单元格、OCR 版面）都被 `ragcli parse` 封装了，Agent 不需要"判断"，只需要"正确调用"。
 
-而 `chunk-expert.md` 反过来——它必须是决策框架，因为没有工具能替 Agent 决定"这份 API 文档该不该切"。你也明确说过：**切块专家得自己写脚本**。
+而 `chunk-worker.md` 反过来——它必须是决策框架，因为没有工具能替 Agent 决定"这份 API 文档该不该切"。你也明确说过：**切块专家得自己写脚本**。
 
 → **结论：Type A 的 Agent 可以做得很薄（甚至可以退化成纯代码，不需要 LLM）；Type B 的 Agent 必须是完整的、有独立上下文的推理单元。**
 
@@ -111,7 +111,7 @@ Worker 不记"上次处理到哪"，只接受输入产出输出。状态全部�
 
 ## 四、执行模型：DAG + Manifest
 
-### 依赖图（`data-pipeline-dependencies.md` 已分析，这里落成可执行形式）
+### 依赖图（`pipeline-dependencies.md` 已分析，这里落成可执行形式）
 
 ```
 parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
@@ -160,81 +160,83 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
 
 ## 五、缺失清单
 
-按"不补就出问题"的紧急度排序。
+按"不补就出问题"的紧急度排序。**状态列标注本次重构的进展。**
 
-### 🔴 P0 — 不补就跑不起来
+### ✅ 本次重构已解决
+
+| # | 项 | 怎么解决的 |
+|---|---|---|
+| R1 | **一份 MD 覆盖全流程的反模式** | 删除 `data-preprocessing-expert.md`（它引用了根本不存在的 `clean` 工具，且与四份专家手册口径不一） |
+| R2 | **文档给谁看不明确** | `docs/` 拆成 `agents/`（Agent 手册，英文）/ `design/`（设计文档，中文）/ `reference/`（自动生成），并加 `docs/README.md` 文档地图 |
+| R3 | **编排手册与实际拓扑不符** | `orchestrator.md` 重写：4 个 worker（parse/chunk/summarize/tagger）+ 2 个 tool step（embed/index），并明确"永不读 worker 手册" |
+| R4 | **Tag Schema 语料级 vs 文档级的边界** | `tagger-worker.md` 加 "What You Receive" 节：Agent **应用**语料级 Schema，**提议**变更但不自行发明值 |
+| R5 | **Chunk 策略 vs 粒度的边界** | `chunk-worker.md` 加 "What You Receive" 节：语料策略定 token 区间/overlap/保护结构，Agent 只定切分策略与边界 |
+| R6 | **Chunk 工具与"专家自己写脚本"的矛盾** | `chunk-worker.md` 明确：三个原语可用，**`ragcli chunk` 只是简单文档的兜底**，专家应自己写脚本 |
+| R7 | **阶段划分按"是不是索引"切不干净** | registry 从 4 阶段（含 `index`）改为 3 阶段：`ingest`（写路径）/ `retrieve`（读路径）/ `evaluate` |
+| R8 | **文档引用了不存在的 `clean` 命令** | `pipeline-dependencies.md` 重写，并说明清洗在 `parse` 内部 |
+| R9 | **CLI 文档与实现漂移** | `reference/cli.md` 改为 `tests/gen_cli_reference.py` 自动生成，禁止手改 |
+
+### 🔴 P0 — 仍然缺，不补跑不起来
 
 | # | 缺什么 | 为什么致命 | 建议 |
 |---|---|---|---|
-| 1 | **正式的 Artifact 契约（JSON Schema）** | 现在四个 MD 各自用散文描述输出格式，`orchestration-guide.md` 里是示例不是规范。Chunk 输出加了字段、Tagger 期望没有 → 静默错位 | 建 `contracts/` 目录，每个 artifact 一份 JSON Schema + 版本号；写一个 `ragcli validate --stage chunk` 校验器 |
-| 2 | **Manifest / 状态机** | 崩了就重来，无法增量，无法审计 | 见上节结构，做成 `ragcli manifest` 子命令 |
-| 3 | **语料级 Tag Schema 注册表** | 当前 `tagger-expert.md` 让 Agent **每个文档自己设计 Schema** → 文档 A 标 `technical`、文档 B 标 `tech`，检索时过滤失效 | Schema 是**语料级**资产，定义一次；Tagger Agent 只**应用**它，变更要走审批。见下节 |
-| 4 | **Chunk 策略记录的强制化** | Chunk 非幂等，不记录就无法复现 | 强制写进 manifest 的 `decision` 字段 |
+| 1 | **正式的 Artifact 契约（JSON Schema）** | 各手册现在用散文描述输出格式；Chunk 输出加字段、Tagger 没预期 → **静默错位**。语义已经在手册里写明，但**没有可执行的校验** | 建 `contracts/` 目录，每个 artifact 一份 JSON Schema + 版本号；加 `ragcli validate --stage chunk` |
+| 2 | **Manifest / 状态机** | 崩了就重来，无法增量，无法审计 | 结构已在 `orchestrator.md` 定义，但**没有实现**；做成 `ragcli manifest init/show/update` |
+| 3 | **语料级 Schema / 策略的存放（工具侧）** | 手册已要求 Agent"应用而非发明"，但**没有地方存放 Schema 和策略文件**，也没有 `ragcli schema` | 建 `corpus/schema.json` + `corpus/chunk-policy.json` + 校验命令 |
 
 ### 🟡 P1 — 生产环境必需
 
 | # | 缺什么 | 问题 | 建议 |
 |---|---|---|---|
-| 5 | **阶段间质量门** | Chunk 产出垃圾 → Tagger 照样跑 → 到检索时才发现 | 每阶段定义可自动化的断言（非空、无重复、token 在限内、heading_path 完整），失败就**打回上一阶段**而不是继续 |
-| 6 | **语料级去重** | `chunk-expert.md` 讲了近重复检测（按 heading path scope），但没有任何东西**负责执行** | 加一个 corpus-level 的 dedup 步骤，独立于单文档管线 |
-| 7 | **增量更新** | 文档改了重新上传 → 全量重跑还是只更新变化部分？ | 用 `source_hash` 判断；文档级变更 → 整篇重跑；语料级 Schema 变更 → 只重跑 tagger |
-| 8 | **Embedding 模型一致性约束** | chunk 大小要适配模型 token 上限；embed 和 search 必须同模型。跨 Agent 无人保证 | 建模型注册表，embed 时把模型名+维度写进 artifact，index/search 校验一致 |
-| 9 | **corpus-level 策略 vs 文档级判断的区分** | 现在 Agent 什么都自己定，包括本该全局统一的东西 | 见下节 |
+| 4 | **阶段间质量门（工具侧）** | 手册列了断言，但没有**执行者** | 每阶段断言做成 `ragcli validate --stage X`，失败打回上一阶段 |
+| 5 | **语料级去重** | `chunk-worker.md` 讲了近重复检测（按 heading path scope），但没有东西负责执行 | 加 corpus-level dedup 步骤，独立于单文档管线 |
+| 6 | **增量更新** | 文档改了 → 全量重跑还是只更新变化部分？ | 用 `source_hash` 判断；文档级变更 → 整篇重跑；语料级 Schema 变更 → 只重跑 tagger |
+| 7 | **Embedding 模型一致性约束** | embed 和 search 必须同模型；chunk 大小要适配模型 token 上限。跨 Agent 无人保证 | 建模型注册表，embed 时把模型名+维度写进 artifact，index/search 校验一致 |
 
 ### 🟢 P2 — 有了更好
 
 | # | 缺什么 | 说明 |
 |---|---|---|
-| 10 | **成本预算与熔断** | 现在只能事后看账单。建议 manifest 记 token，超预算熔断 |
-| 11 | **人工审核检查点** | Schema 变更、低置信度标签、大批量首次入库，值得插一道人工确认 |
-| 12 | **可观测性面板** | 各阶段耗时、失败率、重试率、成本趋势 |
-| 13 | **清理 `data-preprocessing-expert.md`** | 这份手册是"一个 MD 覆盖全部"的早期版本——正是你之前否掉的"三个 MD 同时塞给一个 Agent"反模式。它和 `parse-expert.md` 职责重叠、和另外三个专家口径不一。建议**删除**，或降级成一份只讲"管线顺序与依赖"的索引页，不再重复专家内容 |
+| 8 | **成本预算与熔断** | 现在只能事后看账单。manifest 已定义 `cost` 字段，但没有执行逻辑 |
+| 9 | **人工审核检查点** | Schema 变更、低置信度标签、大批量首次入库，值得插一道人工确认 |
+| 10 | **可观测性面板** | 各阶段耗时、失败率、重试率、成本趋势 |
 
 ---
 
-## 六、两个需要你拍板的设计决策
+## 六、语料级 vs 文档级：已落进手册的边界
 
-### 决策 1：Tag Schema 是语料级还是文档级？
+这两个边界在本次重构中已写进对应手册，列在这里是因为它们是**最容易再次搞混的地方**。
 
-**现状**：`tagger-expert.md` 教 Agent 为每个文档设计 Schema。这是错的。
-
-**问题**：Schema 是**过滤维度**。如果文档 A 用 `domain: "technical"`、文档 B 用 `domain: "tech"`，用户查询"只看技术文档"就会漏掉一半。
-
-**建议**：
+### 决策 1：Tag Schema 是语料级
 
 ```
-语料级（定义一次，稳定）        文档级（每个文档判断）
+语料级（定义一次，稳定）        文档级（Agent 每篇判断）
 ├── domain 枚举               ├── 这份文档属于哪个 domain
 ├── doc_type 枚举             ├── 它是什么体裁
 ├── time_period 规则          ├── 它的时效性
 └── entities 提取规则         └── 它提到哪些实体
-
-        ↑ 谁定？                        ↑ 谁定？
-   Tagger Agent 首次提议           Tagger Agent 每篇判断
-   + Orchestrator 审批
-   + 落库存档
 ```
 
-改法：`tagger-expert.md` 拆成两段——"如何**应用**既定 Schema"（高频）+"如何**提议** Schema 变更"（低频、需审批）。
+**已落地**：`tagger-worker.md` 的 "Your default job: APPLY the schema, not invent one" 一节。
+Agent 遇到无法表达的内容时，标 `unknown` + 产出**变更提议**，绝不自行发明枚举值。
 
-### 决策 2：Chunk 的"策略"和"粒度"谁定？
+**仍缺**：存放 Schema 的地方，以及 `ragcli schema` 命令（见 P0-3）。
 
-**现状**：`chunk-expert.md` 让 Agent 全权决定，包括目标 chunk 大小。
-
-**问题**：目标 token 大小应该由 **embedding 模型上限 + 查询模式** 决定，这是语料级策略，不该每篇文档重新发明。
-
-**建议拆开**：
+### 决策 2：Chunk 粒度是语料级，策略是文档级
 
 ```
 语料级策略（固定）              文档级判断（Agent 决定）
-├── 目标 chunk tokens 区间     ├── 用哪种切分策略（by_header/递归/语义）
+├── 目标 chunk tokens 区间     ├── 用哪种切分策略
 │   （由 embedding 模型定）     ├── 在哪里是安全边界
 ├── overlap 比例下限           ├── 哪些内容不能切
 ├── 必须保护的结构（代码/表格）  └── 整篇当一块还是拆
 └── 必须携带的元数据字段
 ```
 
-改法：`chunk-expert.md` 加一节"你收到一份语料级策略，必须在它的约束内决策"。
+**已落地**：`chunk-worker.md` 的 "Policy vs judgment — the line you must not cross" 一节。
+冲突时策略优先；策略导致某文档无法正确切分时，报为策略缺口而不是静默越界。
+
+**仍缺**：策略文件的存放与加载（同 P0-3）。
 
 ---
 
@@ -249,31 +251,29 @@ parse ──→ clean ──→ chunk ──┬──→ summarize ──┐
         ragcli manifest init/show/update
         ← 有了它才能断点续跑和审计
 
-第 3 步：拆 Tag Schema 与 Chunk 策略的语料级/文档级（P0-3, P0-4, P1-9）
-        改 tagger-expert.md 和 chunk-expert.md
+第 3 步：补语料级 Schema / 策略的存放与加载（P0-3）
+        corpus/schema.json + corpus/chunk-policy.json + ragcli schema
 
-第 4 步：加质量门（P1-5）
-        每阶段断言 + 打回机制
+第 4 步：把手册里的断言变成可执行的质量门（P1-4）
+        ragcli validate --stage X
 
-第 5 步：Write Path 打通端到端
-        parse → clean → chunk → [summarize ∥ tagger] → embed → index
+第 5 步：增量更新 + 去重（P1-5, P1-6）
 
-第 6 步：增量更新 + 去重（P1-6, P1-7）
-
-第 7 步：成本与可观测（P2）
+第 6 步：成本与可观测（P2-8, P2-10）
 ```
 
-**别跳步。** 尤其第 1、2 步——契约和状态是后面所有并行、重试、增量能力的前提。先有它们，再加 Worker，架构才不会塌。
+**别跳步。** 第 1、2、3 步是后面所有并行、重试、增量能力的前提——先有它们，再加 Worker，架构才不会塌。
 
 ---
 
 ## 八、一句话总结
 
-你现在的资产是**四个高质量手册 + 一个可靠的清洗工具**，缺的不是"更多专家"，而是**让这些专家能安全协作的基础设施**：
+现有资产是**四份高质量 Agent 手册 + 一个可靠的清洗工具 + 清晰的文档分层**。经过本次重构，**Agent 设计层面已经自洽**：拓扑一致、边界明确、手册与实现对齐。
 
-- **契约**（怎么交接不出错）
-- **状态**（崩了怎么续、改了怎么增量）
-- **边界**（哪些决策语料级、哪些文档级）
-- **校验**（错了怎么发现）
+剩下缺的全部是**基础设施的工具化**——手册已经描述清楚该做什么，但没有可执行的命令去强制它：
 
-Agent 设计上，核心是那个区分：**Type A 做薄（工具操作），Type B 做厚（判断），两者用独立的 session 严格隔离。**
+- **契约**（怎么交接不出错）→ `ragcli validate`
+- **状态**（崩了怎么续、改了怎么增量）→ `ragcli manifest`
+- **边界**（语料级策略放哪）→ `ragcli schema` / corpus 文件
+
+Agent 设计上，核心是那个区分：**Type A 做薄（工具操作），Type B 做厚（判断），两者用独立 session 严格隔离。**

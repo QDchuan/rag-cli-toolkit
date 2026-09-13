@@ -1,9 +1,17 @@
 """Tool registry — all atomic RAG tools, grouped by pipeline stage.
 
-The `stage` field exists so an agent can ask "what tools belong to the
-pre-processing stage?" without hardcoding a list. That keeps the two agents
-(data-preprocessing vs retrieval) cleanly separated: each one queries only the
-stage it owns.
+Three stages, split by read/write direction rather than by "is it an index":
+
+    ingest    — write path. Everything that happens at ingestion time, including
+                embed and index. These are write operations, same as parse.
+    retrieve  — read path. Everything that happens per query.
+    evaluate  — cross-cutting quality measurement.
+
+The earlier four-stage split kept `index` separate from `ingest`, which was
+misleading: embed/index are write operations that only ever run at ingestion.
+
+The `stage` field exists so each agent can query only the stage it owns, which
+is what keeps the pre-processing agent and the retrieval agent separated.
 """
 
 from ragcli.tools.cache import CACHE_TOOL
@@ -21,23 +29,21 @@ from ragcli.tools.tagger import TAGGER_TOOL
 
 # Canonical stage names, in pipeline order.
 STAGES = {
-    "ingest": "Pre-processing: raw source → normalized, enriched chunks",
-    "index": "Persistence: chunks → vectors → vector store",
-    "retrieve": "Retrieval: query → ranked evidence",
+    "ingest": "Write path: raw source → parsed → cleaned → chunked → enriched → embedded → indexed",
+    "retrieve": "Read path: query → ranked evidence",
     "evaluate": "Quality: measurement and regression detection",
 }
 
 ALL_TOOLS = {
-    # ── ingest: owned by the Data Pre-processing Agent ──
+    # ── ingest: the write path, owned by the pre-processing agent ──
     "parse": {**PARSE_TOOL, "stage": "ingest"},
     "chunk": {**CHUNK_TOOL, "stage": "ingest"},
     "summarize": {**SUMMARIZE_TOOL, "stage": "ingest"},
     "tagger": {**TAGGER_TOOL, "stage": "ingest"},
-    # ── index: the hand-off boundary between the two agents ──
-    "embed": {**EMBED_TOOL, "stage": "index"},
-    "index": {**INDEX_TOOL, "stage": "index"},
-    "graph": {**GRAPH_TOOL, "stage": "index"},
-    # ── retrieve: owned by the Retrieval Agent ──
+    "embed": {**EMBED_TOOL, "stage": "ingest"},
+    "index": {**INDEX_TOOL, "stage": "ingest"},
+    "graph": {**GRAPH_TOOL, "stage": "ingest"},
+    # ── retrieve: the read path, owned by the retrieval agent ──
     "search": {**SEARCH_TOOL, "stage": "retrieve"},
     "hybrid": {**HYBRID_TOOL, "stage": "retrieve"},
     "rerank": {**RERANK_TOOL, "stage": "retrieve"},
