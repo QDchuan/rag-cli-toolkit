@@ -80,6 +80,10 @@ analysis = {
     "noise_level": "clean / moderate / heavy",
     "has_page_numbers": True/False,
     "has_watermarks": True/False,
+    
+    # 重复性特征（关键！）
+    "near_duplicate_ratio": 0.0,      # 与已有知识库中 chunk 的近似重复率
+    "version_tag": "v2 / v3 / latest / unknown",  # 文档版本标识
 }
 ```
 
@@ -187,6 +191,20 @@ protect_fences: true         # overlap 绝不能把 ``` 劈成两半
 
 **正确做法：用实际的 tokenizer（tiktoken / gpt-tokenizer）来计算 token 数量。**
 
+```python
+# ❌ 错误：用字符计数
+chunk_size = 1000  # characters → 代码中可能达到 500 tokens，超出模型限制！
+
+# ✅ 正确：用实际 tokenizer
+import tiktoken
+enc = tiktoken.get_encoding("cl100k_base")  # 对应 GPT-4o / text-embedding-3
+tokens = enc.encode(chunk_text)
+if len(tokens) > model_max_tokens:
+    chunk_text = enc.decode(tokens[:model_max_tokens])
+```
+
+**这条教训来自一线实战**：一个工程师花了数周排查"为什么 API 参考页面的检索效果比散文页面差很多"，最后发现就是 character-based splitter 导致代码 chunks 在 embedding 时被静默截断——没有任何报错，只是向量只包含了前 60% 的内容。加了一个 `tiktoken` 依赖就解决了整个问题。
+
 ### Step 5: 执行切块并验证
 
 ```bash
@@ -282,6 +300,23 @@ You must include the `state` parameter...
 | 合同 | 固定大小切 | 按条款切，条款内不切 |
 | 论文 | 固定大小切 | 按章节切，每章有自己的摘要 |
 | 小说 | 按标题切（没标题） | 语义切块或递归切块 |
+
+### 陷阱 7：忽略近重复检测
+
+**后果**：文档站点是重复工厂。版本化页面（`/v2/`, `/v3/`, `/latest/`）、本地化变体、打印视图、框架生成的索引页意味着一个 500 页的文档站爬下来可能产生 1800 个 chunks，而实际上只有 600 个是独特的。
+
+**如何避免**：
+- **精确哈希去重**：catch byte-identical pages，至少能解决一半问题
+- **SimHash 近重复检测**：便宜且有效，配合 banding lookup
+- **关键陷阱**：near-duplicate detection 必须**按 heading path 作用域**。两个 chunk 只有在 heading path 匹配时才是近重复候选。否则会把：
+
+```
+**Install on Linux** — Run `./configure && make && make install`.
+
+**Install on Windows** — Run `./configure && make && make install`.
+```
+
+当成重复内容删掉——但这是两个完全不同的答案！
 
 ---
 
