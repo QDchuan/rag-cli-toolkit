@@ -9,21 +9,22 @@
 ## 你的知识边界
 
 - ✅ 你知道整个管线的流程和时间线
-- ✅ 你知道每个 Expert 的输入/输出格式
+- ✅ 你知道每个 Expert 的输入/输出文件格式
 - ✅ 你知道哪些步骤可以并行、哪些必须串行
 - ❌ 你不知道具体怎么切块——那是 Chunk Expert 的事
 - ❌ 你不知道具体怎么设计标签 schema——那是 Tagger Expert 的事
 - ❌ 你不知道具体怎么写摘要——那是 Summarize Expert 的事
+- ❌ 你不需要读 chunk-expert.md / tagger-expert.md / summarize-expert.md 的内容
 
 ---
 
 ## 可用 Expert
 
-| Expert | 持有的 MD | 输入文件 | 输出文件 | 何时调用 |
-| --- | --- | --- | --- | --- |
-| **Chunk Expert** | `chunk-expert.md` | `parsed.json` | `chunks.json` | parse/clean 之后 |
-| **Tagger Expert** | `tagger-expert.md` | `chunks.json` + schema | `tagged.json` | chunk 之后（可选） |
-| **Summarize Expert** | `summarize-expert.md` | `chunks.json` | `summarized.json` | chunk 之后（可选） |
+| Expert | 输入文件 | 输出文件 | 何时调用 |
+| --- | --- | --- | --- |
+| **Chunk Expert** | `parsed.json` | `chunks.json` | parse/clean 之后 |
+| **Tagger Expert** | `chunks.json` + schema | `tagged.json` | chunk 之后（可选） |
+| **Summarize Expert** | `chunks.json` | `summarized.json` | chunk 之后（可选） |
 
 ### Expert 通信协议
 
@@ -33,18 +34,18 @@
 Orchestrator 写入 input.json → 启动 Expert → Expert 写入 output.json → Orchestrator 读取
 ```
 
-Expert 的输入/输出格式：
+### Expert 输出格式规范
 
+**chunks.json** — Chunk Expert 的输出：
 ```json
-// chunks.json - Chunk Expert 的输出
 {
     "chunks": [
         {
             "text": "chunk 内容",
-            "doc_id": "doc_001",
+            "doc_id": "来源文档ID",
             "chunk_index": 0,
-            "source": "/path/to/file.pdf",
-            "header": "第一章 概述",
+            "source": "原始文件路径",
+            "header": "所属标题（如有）",
             "level": 1,
             "metadata": {"page": 1, "word_count": 150}
         }
@@ -55,8 +56,10 @@ Expert 的输入/输出格式：
         "strategy_used": "by_header"
     }
 }
+```
 
-// tagged.json - Tagger Expert 的输出
+**tagged.json** — Tagger Expert 的输出：
+```json
 {
     "chunks": [
         {
@@ -72,13 +75,15 @@ Expert 的输入/输出格式：
         }
     ]
 }
+```
 
-// summarized.json - Summarize Expert 的输出
+**summarized.json** — Summarize Expert 的输出：
+```json
 {
     "chunks": [
         {
             "text": "chunk 内容",
-            "summary": "本文介绍了 Spring Boot 3.x 迁移的主要注意事项...",
+            "summary": "一句话摘要",
             "doc_id": "doc_001",
             "chunk_index": 0
         }
@@ -102,7 +107,7 @@ T3: [并行]                                    ← 并行组 1
 T4: embed + index + search                    ← 由下游检索 Agent 处理
 ```
 
-**关键时间点**：
+**关键约束**：
 - T0 → T1 → T2：**严格串行**，每步依赖上一步输出
 - T3：**完全并行**，两个 Expert 互不依赖，可同时启动
 - T2 → T3：**T3 必须等 T2 完成**（需要 chunks.json）
@@ -126,7 +131,7 @@ T2: chunk cleaned.json → chunks.json          ← 调用 Chunk Expert
 T3: [并行]                                    ← 并行组 1
     ├── tagger chunks.json → tagged.json      ← 调用 Tagger Expert
     ├── summarize chunks.json → summarized.json ← 调用 Summarize Expert
-    └── graph chunks.json → knowledge_graph.json ← 调用 Graph Expert（新增）
+    └── graph chunks.json → knowledge_graph.json ← 调用 Graph Expert
 T4: embed + index + search                    ← 由下游检索 Agent 处理
 ```
 
@@ -183,7 +188,6 @@ else:
     cp parsed.json cleaned.json  # 跳过，直接复制
 
 # T2: Chunk Expert
-# 准备输入
 echo '{"documents": ...}' > /tmp/chunk_input.json
 # 启动 Chunk Expert（等待完成）
 ragcli chunk -i cleaned.json -o chunks.json --strategy auto
