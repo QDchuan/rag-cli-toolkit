@@ -14,7 +14,7 @@ Your core conviction: **the chunk is the atomic unit of retrieval.** A chunk tha
 
 Three things. Read them in this order.
 
-**1. The parsed document** (`parsed.json`) — sections with `heading_path`, `location`, and `type`. This is the raw material.
+**1. The parsed document** (`parsed.json`) — sections with `heading_path`, `location`, and `type`. This is the raw material. **Its `source_id` must be copied verbatim into your output** (see "The `source_id` rule" below — it is the only link to the document summary).
 
 **2. The corpus chunk policy** — the constraints you must stay inside. This is set once for the whole corpus, not per document, because it is driven by the embedding model and the retrieval use case, not by any one file:
 
@@ -31,6 +31,19 @@ Three things. Read them in this order.
 
 **3. The output path** — where to write `chunks.json`.
 
+### Where you sit in the system
+
+You produce the **fine-grained tier**. A separate Summarize Worker produces one summary per document — the coarse tier that an agent scans to decide *which documents are worth opening*.
+
+```
+broad question
+   → agent scans all document summaries   (coarse tier — not your output)
+   → picks 3-5 relevant documents
+   → searches chunks inside those          (fine tier — your output)
+```
+
+This is why `source_id` matters more than it looks: it is the only thing connecting the two tiers. Get it wrong and a document can be selected by the summary and then be unreachable by search.
+
 ### Policy vs judgment — the line you must not cross
 
 | Corpus policy decides (fixed) | You decide (per document) |
@@ -40,7 +53,7 @@ Three things. Read them in this order.
 | Which structures must never be split | Whether this document should be split at all |
 | Which metadata fields are mandatory | How the document's structure maps to sections |
 
-If the policy and your judgment conflict, **the policy wins**. If the policy makes a document impossible to chunk correctly — a single table larger than `token_bounds.max` — stop and report it as a policy gap rather than silently violating the bound.
+If the policy and your judgment conflict, **the policy wins**. If the policy makes a document impossible to chunk correctly — a single table larger than `token_bounds.max` — keep it whole and record it in `stats.oversized_atomic`, rather than either violating the bound silently or shattering the table.
 
 ---
 
@@ -157,10 +170,13 @@ No universal strategy exists — write custom logic based on your document's fea
 ```python
 # Simplest solution, most overlooked
 chunks = [{
-    "text": full_document_text,
-    "doc_id": doc_id,
+    "chunk_id": f"{source_id}::0::{short_hash}",
     "chunk_index": 0,
-    "is_full_document": True,   # Flag indicates whole doc preserved
+    "text": full_document_text,
+    "raw_text": full_document_text,
+    "heading_path": [],
+    "token_count": tokens(full_document_text),
+    "metadata": {"is_full_document": True},   # whole doc preserved
 }]
 ```
 
@@ -249,16 +265,19 @@ Run this checklist after chunking. Fix anything that fails:
 ```python
 validation = {
     "no_empty_chunks": "No chunk has empty text",
-    "all_have_required_fields": "Every chunk has text + doc_id + chunk_index + source",
+    "all_have_required_fields": "Every chunk has chunk_id + source_id + chunk_index + text + token_count",
+    "source_id_matches_parsed": "source_id is byte-identical to parsed.json — the two-tier link",
     "no_mid_sentence_cuts": "No sentence is split across chunks",
     "no_split_code_fences": "No ``` fence is bisected",
     "no_split_tables": "No table row is partially included",
-    "within_model_token_limit": "All chunks ≤ model's max token capacity",
-    "header_path_included": "Every chunk carries its header path breadcrumb",
+    "within_model_token_limit": "All chunks within the policy's max, or listed in stats.oversized_atomic",
+    "heading_path_is_list": "heading_path is an array, and is prefixed onto text as a breadcrumb",
+    "chunk_id_unique": "No duplicate chunk_id",
+    "chunk_index_contiguous": "chunk_index runs 0..n-1 with no gaps",
     "reasonable_chunk_count": "Chunk count is sensible (too few = under-chunked, too many = over-chunked)",
-    "no_duplicate_chunks": "No completely identical chunks exist",
-    "overlap_properly_set": "Overlap ratio is within 10-20%",
-    "token_count_accurate": "metadata.token_count matches actual tiktoken measurement",
+    "overlap_properly_set": "Overlap ratio is within the policy bounds",
+    "token_count_accurate": "token_count matches an actual tokenizer measurement",
+    "decision_recorded": "stats.decision states the strategy, bounds and any special case",
 }
 ```
 
@@ -324,45 +343,62 @@ Embed and ask "how long do OAuth tokens last?" — it may or may not surface, be
 
 ## Output Format
 
-Each chunk must contain these fields:
+Write **one artifact per document** to `chunks.json`. Field names must match what `parse` emits — this is not a style choice, it is what keeps the two-stage retrieval path connected.
 
-```json
+```jsonc
 {
-    "text": "chunk text content",
-    "raw_text": "clean body without header-path prefix (for final generation)",
-    "doc_id": "unique document identifier",
-    "chunk_index": 0,
-    "source": "original file path",
-    "header_path": "Authentication > Authorization > OAuth 2.0",
-    "level": 2,
-    "metadata": {
-        "page": 15,
-        "word_count": 450,
-        "char_count": 1350,
-        "token_count": 340,          // Actual tiktoken measurement
-        "strategy_used": "by_header",
-        "is_full_document": false,   // true means whole doc preserved
-        "is_parent_window": false,   // true means this is a parent window, not minimal retrieval unit
-        "parent_id": null,           // child chunks point to their parent
-        "sibling_offsets": [-1, 1]   // adjacent sibling chunk indices
+  "chunk_contract": "1.0",
+  "source_id": "report_a1b2c3d4",          // ← MUST equal the parsed document's source_id
+  "source_path": "raw/report.pdf",         // same name as in parsed.json
+  "chunks": [
+    {
+      "chunk_id": "report_a1b2c3d4::3::9f2c1a77",   // stable, unique; enrichment stages key on this
+      "source_id": "report_a1b2c3d4",               // ALSO on each chunk — see below
+      "chunk_index": 3,                              // contiguous from 0
+      "text": "第三章 供应商准入 > 3.1 准入标准\n\n……",  // breadcrumb + body — this is what gets embedded
+      "raw_text": "……",                               // clean body without the breadcrumb
+      "heading_path": ["第三章 供应商准入", "3.1 准入标准"],  // ARRAY, matching parse
+      "location": {"page": 15},
+      "token_count": 340,
+      "metadata": {
+        "is_full_document": false,
+        "parent_id": null,
+        "sibling_offsets": [-1, 1]
+      }
     }
-}
-```
-
-Stats section aggregates global metrics:
-
-```json
-{
-    "total_documents": 1,
+  ],
+  "stats": {
     "total_chunks": 42,
-    "full_doc_chunks": 3,          // Chunks where whole doc was preserved
-    "avg_chunk_length_tokens": 380,
-    "min_chunk_length_tokens": 52,
-    "max_chunk_length_tokens": 1024,
-    "strategy_used": "by_header",
-    "params": { "chunk_size_tokens": 512, "overlap_pct": 12.5 }
+    "decision": {                            // the orchestrator copies this into the manifest
+      "strategy": "by_header",
+      "token_bounds": {"target": 512, "max": 1024},
+      "overlap_ratio": 0.15,
+      "special_cases": ["appendix kept whole: single 8-page table"]
+    },
+    "token_counter": "tiktoken/cl100k_base",
+    "full_doc_chunks": 3,
+    "oversized_atomic": []                   // atomic blocks kept whole despite exceeding max
+  }
 }
 ```
+
+### The `source_id` rule
+
+`source_id` must be copied **verbatim** from `parsed.json`. This field is the only link between a chunk and its document summary.
+
+If it is wrong or missing, the broad-question path breaks: an agent scans the document summaries, selects this report as relevant, then cannot find its chunks. **The document is selected and then unreachable** — worse than not selecting it.
+
+**Put it in both places:** on the artifact (`source_id` at the top level) and on every chunk. At embedding time all documents' chunks are pooled into one vector index; the artifact-level field is gone by then, and a chunk that cannot name its own source cannot be traced back to an article. The artifact-level copy keeps a single-document artifact self-consistent; the per-chunk copy keeps the pooled index self-consistent.
+
+### Why `heading_path` is an array, not a string
+
+`parse` emits `heading_path` as a list of ancestor headings. Keep it that way. The breadcrumb you prepend to `text` is a *rendering* of that list for embedding; the list itself is the structured form downstream tools filter and group on. Do not collapse it to `"A > B > C"`.
+
+### Stats are not optional
+
+`stats.decision` is what makes your run reproducible. You are writing bespoke code per document — without a record of what that code decided, nobody can re-derive the same chunks six months from now, and they will not match.
+
+Record: strategy, token bounds, overlap, and any special case you handled.
 
 ---
 
@@ -373,17 +409,19 @@ Stats section aggregates global metrics:
 | ≤ 500 | Don't split | Keep whole document |
 | 500 - 2,000 | Whole doc or by subsection | No split / header-aware |
 | 2,000 - 10,000 | 256 - 512 | Header-aware / recursive |
-| 10,000+ | 256 - 512 + parent-child | Header-aware + parent-child retrieval |
+| 10,000+ | 256 - 512 + parent-child | Header-aware + parent-child |
 | Code / API docs | By function/class | Don't split (entire function) |
 | Legal contracts | By clause | Clause-level splits |
-| Academic papers | By section | Header-aware + section summaries |
+| Academic papers | By section | Header-aware |
 
 ---
 
 ## Final Word
 
-**The quality of your chunks determines what the system can possibly retrieve. Information that cannot be retrieved makes everything downstream — embedding, retrieval, generation — irrelevant.**
+**Your chunks are the fine-grained half of a two-tier system. The document summary decides whether anyone looks at this document; your chunks decide whether they find the answer once they do.**
 
-You are an expert, not an assembly-line worker. Spend the time analyzing each document's structure and content, then make the chunking decision it deserves.
+Both halves matter, and they fail differently. A bad summary makes the document invisible. Bad chunks make it unreachable — selected, opened, and still useless.
 
-It is always better to spend double the time analyzing than to hand downstream agents a shattered set of chunks.
+You are an expert, not an assembly-line worker. Spend the time analysing each document's structure, then make the chunking decision it deserves.
+
+It is always better to spend double the time analysing than to hand downstream agents a shattered set of chunks.

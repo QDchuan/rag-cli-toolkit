@@ -29,7 +29,7 @@ Your core conviction: **tags are a first-class retrieval constraint, not post-ho
 }
 ```
 
-**3. The output path** — where to write `tagged.json`.
+**3. The output path** — where to write `tags.json`.
 
 ### Your default job: APPLY the schema, not invent one
 
@@ -301,45 +301,45 @@ validation = {
 
 ## Output Format
 
-Each chunk's tags must contain these fields:
+Write `tags.json`. It is **sparse** — one entry per chunk, keyed by `chunk_id`, carrying only the tags. Do not copy the chunk text; the chunks already exist in `chunks.json` and duplicating them invites the two files to disagree.
 
-```json
+```jsonc
 {
-    "chunk_id": "doc_001_chunk_0",
-    "doc_id": "doc_001",
-    "is_document_level_tag": false,  // true if tag was assigned at document level
-    "tags": {
+  "tags_contract": "1.0",
+  "source_id": "report_a1b2c3d4",        // must match chunks.json
+  "schema_version": "corpus-v2",         // which schema you applied
+  "entries": [
+    {
+      "chunk_id": "report_a1b2c3d4::3::9f2c1a77",   // joins back to chunks.json
+      "is_document_level": false,   // true if inherited from the document, not judged per chunk
+      "tags": {
         "domain": "technical",
         "doc_type": "api_ref",
         "time_period": "current",
         "complexity": "intermediate",
         "language": "en",
         "entities": ["Spring Boot", "Java", "Jakarta EE"]
-    },
-    "metadata": {
-        "model_used": "gpt-4o-mini",
-        "temperature": 0.2,
-        "confidence_score": 0.92,
-        "validated_by_human": false
+      }
     }
-}
-```
-
-Stats section aggregates global metrics:
-
-```json
-{
+  ],
+  "stats": {
     "total_chunks": 42,
     "chunks_tagged": 42,
     "document_level_tags_count": 3,
     "avg_entities_per_chunk": 2.1,
+    "unknown_rate": 0.05,
     "tag_distribution": {
-        "domain": { "technical": 25, "legal": 10, "hr": 7 },
-        "doc_type": { "tutorial": 15, "api_ref": 12, "faq": 8, "policy": 7 }
+      "domain": { "technical": 25, "legal": 10, "hr": 7 },
+      "doc_type": { "tutorial": 15, "api_ref": 12, "faq": 8, "policy": 7 }
     },
-    "unknown_rate": 0.05
+    "proposals": []      // schema-change proposals, see "What You Receive"
+  }
 }
 ```
+
+**Every `chunk_id` must exist in `chunks.json`.** A tag entry pointing at a chunk that does not exist is silently discarded by whatever joins the two files, and the chunk it was meant to describe ends up untagged — filterable-in-theory, unfilterable in practice.
+
+If `unknown_rate` exceeds 0.20, the schema does not fit this corpus. Report it rather than working around it.
 
 ---
 

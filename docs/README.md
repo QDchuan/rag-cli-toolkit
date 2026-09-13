@@ -40,10 +40,13 @@ Each file is injected into **exactly one** agent, in a **fresh session**. Never 
 
 | File | Covers |
 |---|---|
-| [`architecture.md`](design/architecture.md) | Agent topology, the two-kinds-of-expert distinction, contracts, manifest, the gap list |
+| [`workflow.md`](design/workflow.md) | **Start here.** The end-to-end workflow: stages, the two artifact tiers, quality routing, corpus policy, summary budget arithmetic, acceptance criteria |
+| [`architecture.md`](design/architecture.md) | Agent topology, the two-kinds-of-expert distinction, the gap list |
 | [`pipeline-dependencies.md`](design/pipeline-dependencies.md) | Execution order, parallelism, concurrency hazards, scenario pipelines |
 
-Start with `architecture.md` §1 — it explains why `parse` is a thin tool-operator while `chunk` is a thick judgment worker. Almost every other decision follows from that distinction.
+**Read `workflow.md` first.** It defines what the system produces and why — the other two documents explain how it is organised and executed.
+
+The single fact almost everything else follows from: there are **two artifact tiers**. A document-level summary (one per document, scanned in bulk) answers "which documents might be relevant"; chunks answer "where exactly is the answer". A document missing from either tier is lost, and lost silently.
 
 ---
 
@@ -68,12 +71,17 @@ Earlier revisions mixed a "compose atomic CLI tools" model with an "expert agent
 | Question | The single answer |
 |---|---|
 | Is this a CLI toolkit or an agent system? | **Both, at different layers.** The CLI is the execution layer; agents are the decision layer. |
+| What does the system produce? | **Two tiers:** one document summary per document (the coarse tier, scanned in bulk via `catalog.jsonl`), and chunks (the fine tier, similarity-searched). Both are mandatory for every document. |
+| What is a summary *for*? | **Filtering, not context.** An agent scans all summaries to decide which documents to open. The test: could a reader who has not opened the document decide relevance from the summary alone? |
+| Do chunks need summaries? | **No.** Chunks carry their own text. Summaries are document-level only. |
 | How many tools exist? | **One: `parse`.** Eleven others (chunk/tagger/summarize/embed/index/search/…) were removed — written once, never executed, never tested. A tool that has never run is a liability, not an asset. |
 | Who decides chunking? | **Chunk Worker writes the script.** There is no `ragcli chunk`, deliberately — no fixed CLI can express per-document boundary decisions. |
 | Who decides the tag schema? | **The corpus**, not the document. Tagger Worker applies it and proposes changes; it does not invent values. |
 | Is `clean` a step? | **No.** Cleaning runs inside `parse`. There has never been a `clean` command. |
 | How many stages? | **Three declared:** `ingest` (write path), `retrieve` (read path), `evaluate`. Only `ingest` has a tool. |
 | How many agents? | **One orchestrator + four workers** (parse / chunk / summarize / tagger). |
+| Can parsing fail silently? | **Yes, and that is exactly why `verdict` exists.** A scanned PDF with no OCR engine yields zero sections and no exception. The verdict gate stops it before it becomes an empty catalogue entry that looks valid. |
+| Can a summary be skipped? | **No.** Skipping saves one LLM call and makes the document permanently unfindable. If the budget cannot cover every document, stop and report — a catalogue with holes is undetectable from outside. |
 
 **Why only `parse` is a tool:** its difficulty is *format handling*, which a library should own. The other stages are difficulty of *judgment* — no fixed command can express them, so the worker writes code. See [`design/architecture.md`](design/architecture.md) §8.
 

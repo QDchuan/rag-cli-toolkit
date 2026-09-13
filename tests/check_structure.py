@@ -110,6 +110,146 @@ if cli_ref.is_file():
     stale = [t for t in REMOVED if f"ragcli {t} " in ref]
     check("cli reference documents no removed tool", not stale, f"stale: {stale}")
 
+# ── 9. Field names in the manuals match what the code emits ───────────────
+# Three worker manuals previously used three different names for the same
+# concepts, and none matched `parse`. That broke the two-tier path silently:
+# a document could be selected by its summary and then be unreachable by chunk
+# search, with every individual artifact looking valid.
+from ragcli.parsers.base import ParsingResult, Section  # noqa: E402
+
+EMITTED = set(Section.__dataclass_fields__) | set(ParsingResult.__dataclass_fields__)
+# Container/aggregate names the manuals legitimately use
+CONTRACT_NAMES = {
+    "chunks", "tags", "summary", "summaries", "topics", "title",
+    "chunk_contract", "summary_contract", "manifest_version",
+    "verdict", "verdict_reasons", "decision", "warnings",
+    "is_full_document", "parent_id", "sibling_offsets", "oversized_atomic",
+    "token_counter", "doc_type", "language", "page_count", "model_used",
+    "temperature", "budget_version", "chunk_count", "processed_at", "status",
+    "text", "raw_text", "token_count", "chunk_id", "chunk_index",
+    "summary_type", "summary_text", "summary_raw", "strategy", "strategy_used",
+    "params", "special_cases", "token_bounds", "overlap_ratio",
+}
+CANONICAL = EMITTED | CONTRACT_NAMES
+
+#: Names that earlier revisions used and that must not come back.
+RETIRED_FIELDS = ["doc_id", "header_path", "summarized.json", "tagged.json"]
+
+manual_dir = DOCS / "agents"
+field_regressions: list[str] = []
+for manual in sorted(manual_dir.glob("*.md")):
+    if manual.name == "orchestrator.md":
+        continue  # the orchestrator deliberately does not know field names
+    for lineno, line in enumerate(manual.read_text(encoding="utf-8").split("\n"), 1):
+        for retired in RETIRED_FIELDS:
+            if f'"{retired}"' in line or f"`{retired}`" in line:
+                field_regressions.append(f"{manual.name}:{lineno} uses retired '{retired}'")
+
+check(
+    "manuals contain no retired field names",
+    not field_regressions,
+    "; ".join(field_regressions[:3]),
+)
+
+# ── 10. The coarse tier is described as retrieval, not as context ─────────
+summ = (manual_dir / "summarize-worker.md").read_text(encoding="utf-8")
+check(
+    "summarize manual no longer claims summaries are unused for retrieval",
+    "not embedded or used for retrieval" not in summ,
+    "the old (wrong) claim is still present",
+)
+check(
+    "summarize manual describes the coarse tier",
+    "coarse" in summ.lower() and "catalogue" in summ.lower(),
+    "missing the two-tier framing",
+)
+check(
+    "summarize manual covers every document (no skip case)",
+    "no exceptions" in summ.lower() or "every document" in summ.lower(),
+    "the 'skip short documents' rule may have returned",
+)
+
+chunk = (manual_dir / "chunk-worker.md").read_text(encoding="utf-8")
+check(
+    "chunk manual states the source_id linkage rule",
+    "source_id" in chunk and "verbatim" in chunk.lower(),
+    "missing the source_id linkage requirement",
+)
+check(
+    "chunk manual says heading_path is an array",
+    "ARRAY" in chunk or "array, not a string" in chunk.lower(),
+    "missing the heading_path type rule",
+)
+check(
+    "chunk manual requires stating a decision",
+    "stats.decision" in chunk,
+    "missing the reproducibility requirement",
+)
+
+# ── 11. The workflow doc exists and holds the two-tier design ─────────────
+wf = DOCS / "design" / "workflow.md"
+check("workflow doc exists", wf.is_file())
+if wf.is_file():
+    wtext = wf.read_text(encoding="utf-8")
+    check("workflow doc names both tiers", "粗层" in wtext and "细层" in wtext)
+    check("workflow doc records the summary budget arithmetic", "摘要长度" in wtext)
+    check("workflow doc defines the verdict states",
+          all(v in wtext for v in ("ok", "degraded", "unusable")))
+
+# ── 12. Chinese copies stay structurally in sync with their originals ─────
+# The .zh.md copies exist so a human can review what the agent was told. When
+# they drift they are worse than useless: the reviewer reads a stale mental
+# model and approves it. This check makes drift detectable at the heading level.
+import re
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+\S")
+
+
+def headings(path: Path) -> list[int]:
+    """Return heading levels (1-6), skipping anything inside a fenced code block.
+
+    Fence-awareness matters: these manuals are full of Python and JSON examples
+    where `#` starts a comment. A naive `^#` grep counts those as headings and
+    reports a phantom mismatch between the English and Chinese files.
+    """
+    levels: list[int] = []
+    in_fence = False
+    fence_marker = ""
+    for line in path.read_text(encoding="utf-8").split("\n"):
+        stripped = line.lstrip()
+        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
+            in_fence = True
+            fence_marker = stripped[:3]
+            continue
+        if in_fence:
+            if stripped.startswith(fence_marker):
+                in_fence = False
+            continue
+        m = _HEADING_RE.match(line)
+        if m:
+            levels.append(len(m.group(1)))
+    return levels
+
+
+sync_problems: list[str] = []
+for en in sorted(AGENTS.glob("*.md")):
+    if en.name.endswith(".zh.md"):
+        continue
+    zh = en.with_name(en.stem + ".zh.md")
+    if not zh.exists():
+        continue
+    en_lv, zh_lv = headings(en), headings(zh)
+    if en_lv != zh_lv:
+        sync_problems.append(
+            f"{zh.name}: levels {zh_lv} != {en.name} {en_lv}"
+        )
+
+check(
+    "Chinese copies match their originals' heading structure",
+    not sync_problems,
+    "; ".join(sync_problems[:2]),
+)
+
 # ── report ────────────────────────────────────────────────────────────────
 width = max(len(n) for _, n, _ in results)
 passed = sum(1 for ok, _, _ in results if ok)

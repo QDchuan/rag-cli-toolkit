@@ -22,6 +22,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+# ── verdict thresholds ────────────────────────────────────────────────────
+# Tuned to be conservative: they exist to catch silent failure, not to grade
+# quality. A false "degraded" costs a spot-check; a missed "unusable" costs an
+# invisible document.
+
+#: Below this many characters per page, a multi-page document is treated as a
+#: scan whose text layer never existed (native extraction "succeeded" on nothing).
+MIN_CHARS_PER_PAGE = 25
+
+#: If cleaning removed more than this share of blocks, the source may be mostly
+#: boilerplate the pipeline misread as content — worth a human look.
+MAX_CLEANING_REMOVAL_RATIO = 0.5
+
 
 @dataclass
 class Section:
@@ -59,6 +72,9 @@ class ParsingResult:
     meta: dict[str, Any] = field(default_factory=dict)
     sections: list[Section] = field(default_factory=list)
     stats: dict[str, Any] = field(default_factory=dict)
+    #: ok | degraded | unusable — computed by `decide_verdict()`
+    verdict: str = "ok"
+    verdict_reasons: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,10 +84,76 @@ class ParsingResult:
             "meta": self.meta,
             "sections": [s.to_dict() for s in self.sections],
             "stats": self.stats,
+            "verdict": self.verdict,
+            "verdict_reasons": self.verdict_reasons,
         }
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+
+    def decide_verdict(self) -> "ParsingResult":
+        """Classify the extraction as ok / degraded / unusable, and say why.
+
+        This is the routing signal the orchestrator branches on. It exists
+        because a parse can fail *silently*: a scanned PDF without an OCR engine
+        returns zero sections and no exception, and an empty document that looks
+        valid is worse than one that visibly failed — nobody investigates it.
+
+        The rules are deliberately deterministic and cheap. They are not a
+        quality score; they answer exactly one question: *is this safe to send
+        downstream, and does a human need to look at it?*
+        """
+        reasons: list[str] = []
+
+        # ── unusable: nothing came out ────────────────────────────────────
+        if not self.sections:
+            self.verdict = "unusable"
+            self.verdict_reasons = ["no sections extracted"]
+            return self
+
+        total_chars = sum(len(s.content) for s in self.sections)
+
+        # ── unusable: far too little text for the page count ──────────────
+        # A multi-page document yielding a handful of characters per page is a
+        # scan whose text layer does not exist. Native extraction succeeded
+        # "successfully" and produced nothing usable.
+        pages = self.meta.get("page_count")
+        if isinstance(pages, int) and pages > 1:
+            chars_per_page = total_chars / pages
+            if chars_per_page < MIN_CHARS_PER_PAGE:
+                self.verdict = "unusable"
+                self.verdict_reasons = [
+                    f"only {chars_per_page:.0f} chars/page across {pages} pages "
+                    f"— likely a scanned document; install an OCR engine "
+                    f"(pip install paddleocr) and re-run with --strategy ocr"
+                ]
+                return self
+
+        # ── degraded: usable, but a human should spot-check ───────────────
+        for w in self.stats.get("warnings") or []:
+            reasons.append(str(w))
+
+        if self.meta.get("is_scanned"):
+            reasons.append("text was recovered by OCR — verify accuracy on a sample")
+
+        cleaning = self.stats.get("cleaning") or {}
+        before = cleaning.get("blocks_before")
+        removed = cleaning.get("blocks_removed")
+        if isinstance(before, int) and isinstance(removed, int) and before > 0:
+            ratio = removed / before
+            if ratio > MAX_CLEANING_REMOVAL_RATIO:
+                reasons.append(
+                    f"cleaning removed {ratio:.0%} of blocks — check the source is not "
+                    f"mostly boilerplate the pipeline misread as content"
+                )
+
+        if reasons:
+            self.verdict = "degraded"
+            self.verdict_reasons = reasons
+        else:
+            self.verdict = "ok"
+            self.verdict_reasons = []
+        return self
 
     def validate(self) -> list[str]:
         """Return a list of contract violations. Empty list means healthy.
@@ -84,6 +166,8 @@ class ParsingResult:
             problems.append("source_id is empty")
         if not self.format_type or self.format_type == "unknown":
             problems.append("format_type was not set by the parser")
+        if self.verdict not in {"ok", "degraded", "unusable"}:
+            problems.append(f"unknown verdict '{self.verdict}'")
         for i, sec in enumerate(self.sections):
             if sec.block_id != i:
                 problems.append(f"section[{i}].block_id is {sec.block_id}, expected {i}")

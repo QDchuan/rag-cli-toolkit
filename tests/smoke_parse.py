@@ -170,7 +170,10 @@ except ParseError as e:
     check("unknown ext: helpful error", "Supported extensions" in str(e), str(e)[:120])
 
 # ── 8. Contract stability across every source type parsed above ───────────
-required_keys = {"source_id", "source_path", "format_type", "meta", "sections", "stats"}
+required_keys = {
+    "source_id", "source_path", "format_type", "meta", "sections", "stats",
+    "verdict", "verdict_reasons",
+}
 all_ok = True
 for res in (r, r_csv, r_json, r_txt, r_wide):
     if set(res.to_dict().keys()) != required_keys:

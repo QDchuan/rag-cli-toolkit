@@ -31,59 +31,78 @@ This boundary is the whole point of your existence. Respect it strictly.
 ## The Pipeline
 
 ```
-raw source
+raw source (PDF / image / URL / Word / Excel / …)
    │
-   ├─ [worker] parse      → parsed.json      (also runs cleaning internally)
+   ├─ [tool]   parse       → parsed.json     (cleaning runs inside this step)
    │
-   ├─ [worker] chunk      → chunks.json
+   ├─ [you]    quality gate: read verdict
+   │              ├─ unusable  → review queue, STOP for this document
+   │              └─ ok / degraded → continue
    │
-   ├─ ┌ [worker] summarize → summarized.json ┐   parallel
-   │  └ [worker] tagger    → tagged.json     ┘
+   ├─ ┌ [worker] summarize → doc-summary.json ┐  parallel
+   │  └ [worker] chunk     → chunks.json      ┘
    │
-   ├─ [tool]   embed      → embedded.json
-   └─ [tool]   index      → vector store
+   └─ [you]    catalogue   → catalog.jsonl   (one line per document)
 ```
 
 ### Implementation status — read this before scheduling
 
-Not every step below has a command behind it yet. Know which is which:
-
 | Step | Implementation | How it runs |
 |---|---|---|
 | `parse` | ✅ **`ragcli parse`** | You run it directly |
+| quality gate | ⚙️ `verdict` field in `parsed.json` | You read it and branch |
+| `summarize` | ❌ no tool — by design | Delegate to Summarize Worker, which writes its own script |
 | `chunk` | ❌ no tool — by design | Delegate to Chunk Worker, which writes its own script |
-| `summarize` | ❌ no tool — by design | Delegate to Summarize Worker |
-| `tagger` | ❌ no tool — by design | Delegate to Tagger Worker |
-| `embed` | ❌ not built | Out of current scope |
-| `index` | ❌ not built | Out of current scope |
+| `tagger` | ❌ no tool — by design | Delegate to Tagger Worker (only if filtered retrieval is needed) |
+| catalogue | ❌ not built | You assemble `catalog.jsonl` from the workers' outputs |
 
 `parse` is the only step with a pre-built command, because it is the only one whose difficulty lies in *format handling* rather than *judgment* — and format handling is exactly what a library should own.
 
-The enrichment steps have no command because no fixed CLI can express their decisions. The workers write code.
+The two enrichment steps have no command because no fixed CLI can express their decisions. The workers write code.
 
-`embed` and `index` are not implemented. If your run needs a vector store, that is outside what this toolkit currently provides — say so rather than pretending the step happened.
+**`embed` and `index` are out of scope.** This project ends at `chunks.json` + `catalog.jsonl`. Do not schedule vector-store steps; say the corpus is ready for them instead.
 
 ### Two kinds of step
 
 | Kind | Steps | Who runs it |
 |---|---|---|
 | **Tool step** | `parse` | **You run it directly** — it is a command |
-| **Worker step** | `chunk`, `summarize`, `tagger` | Delegate to a worker agent — it writes code |
-
-Run `parse` yourself. Spinning up an agent to execute `ragcli parse -f x -o y` wastes time and money, and the Parse Worker's job is largely to read the warnings and decide whether the result is usable — see its manual for when that warrants escalation.
+| **Worker step** | `summarize`, `chunk`, `tagger` | Delegate to a worker agent — it writes code |
+| **Your own step** | quality gate, catalogue | You do it — no agent needed |
 
 ---
 
-## The Four Workers
+## What You Are Actually Building
+
+Two artefacts, serving two different kinds of question. Understanding this is what makes your scheduling decisions correct.
+
+| Artefact | Tier | Answers |
+|---|---|---|
+| `catalog.jsonl` (from `doc-summary.json`) | **coarse** | "Which documents might be relevant?" — an agent scans every summary |
+| `chunks.json` | **fine** | "Where exactly is the answer?" — similarity search inside selected documents |
+
+```
+broad question   → scan catalog.jsonl → pick 3-5 documents → search their chunks
+specific question → search chunks directly
+```
+
+**Consequence for scheduling:** you must produce **both**, for **every** document. A document with chunks but no catalogue entry is invisible to broad questions. A document with a summary but no chunks is selectable and then unreachable. Either way it is lost.
+
+If you are ever forced to drop one, **drop neither — report the shortfall instead.** Half a document is not a smaller win; it is a silent hole in the corpus.
+
+---
+
+## The Three Workers
 
 You address workers by name and by the artifact they exchange. Nothing more.
 
 | Worker | Input artifact | Output artifact | What it is for (one line) |
 |---|---|---|---|
-| **Parse Worker** | raw file / URL | `parsed.json` | Turns any source format into the standard section contract |
-| **Chunk Worker** | `parsed.json` | `chunks.json` | Decides how to split each document and executes the split |
-| **Summarize Worker** | `chunks.json` | `summarized.json` | Decides whether and how to summarise, then does it |
-| **Tagger Worker** | `chunks.json` + schema | `tagged.json` | Assigns classification labels from the corpus schema |
+| **Summarize Worker** | `parsed.json` + summary budget | `doc-summary.json` | Writes the one-line catalogue entry that makes the document findable |
+| **Chunk Worker** | `parsed.json` + chunk policy | `chunks.json` | Decides how to split the document and executes the split |
+| **Tagger Worker** | `chunks.json` + tag schema | `tags.json` | Assigns classification labels, only if filtered retrieval is needed |
+
+**Summarize and Chunk are independent** — both read `parsed.json`, neither reads the other. Run them in parallel. **Tagger depends on Chunk** (it labels chunks), so it runs after.
 
 ### How to invoke a worker
 
@@ -107,20 +126,28 @@ Use one run directory per document so a failed run is inspectable and resumable:
 
 ```
 runs/<source_id>/
-├── manifest.json        # state, decisions, validation, cost — YOU own this
-├── parsed.json
-├── chunks.json
-├── summarized.json
-└── tagged.json
+├── manifest.json        # state, decisions, validation — YOU own this
+├── parsed.json          # ragcli parse writes it
+├── doc-summary.json     # Summarize Worker — the catalogue line
+├── chunks.json          # Chunk Worker — the fine tier
+├── tags.json            # Tagger Worker, only if filtered retrieval is needed
+├── chunk.py             # the script Chunk Worker wrote (reproducibility)
+└── *.error.json         # written by a worker that failed, with its evidence
 ```
 
-**You own `manifest.json` and nothing else.** Workers own their own artifacts.
+Then one corpus-level file, which you assemble:
+
+```
+catalog.jsonl            # one line per document — the entry point for broad questions
+```
+
+**You own `manifest.json` and `catalog.jsonl`.** Workers own their own artifacts.
 
 ---
 
 ## The Manifest
 
-The manifest is how you survive a crash and how you answer "what happened to this document?". Update it after every step. It records state, the worker's decisions, validation results, and cost.
+The manifest is how you survive a crash and how you answer "what happened to this document?". Update it after every step. It records state, the worker's decisions, and validation results.
 
 ```jsonc
 {
@@ -131,22 +158,27 @@ The manifest is how you survive a crash and how you answer "what happened to thi
     "source_id": "report_a1b2c3d4",      // drives the run directory name
     "ingested_at": "2026-09-13T12:00:00Z"
   },
+  "verdict": {
+    "value": "ok",                       // ok | degraded | unusable
+    "reasons": [],
+    "decided_at": "..."
+  },
   "stages": {
-    "parse":     { "status": "done",    "artifact": "runs/report_a1b2c3d4/parsed.json",
+    "parse":     { "status": "done", "artifact": "runs/report_a1b2c3d4/parsed.json",
                    "finished_at": "...", "attempts": 1 },
-    "chunk":     { "status": "done",    "artifact": "runs/report_a1b2c3d4/chunks.json",
+    "chunk":     { "status": "done", "artifact": "runs/report_a1b2c3d4/chunks.json",
                    "finished_at": "...", "attempts": 2,
-                   "decision": { "strategy": "by_header", "chunk_size": 512, "overlap": 64 } },
-    "summarize": { "status": "done",    "artifact": "runs/report_a1b2c3d4/summarized.json" },
-    "tagger":    { "status": "done",    "artifact": "runs/report_a1b2c3d4/tagged.json" },
-    "embed":     { "status": "running", "started_at": "..." },
-    "index":     { "status": "pending" }
+                   "decision": { "strategy": "by_header", "token_bounds": {...},
+                                 "overlap_ratio": 0.15,
+                                 "special_cases": ["appendix kept whole"] } },
+    "summarize": { "status": "done", "artifact": "runs/report_a1b2c3d4/doc-summary.json" },
+    "tagger":    { "status": "skipped", "reason": "single-domain corpus, no filtered retrieval" },
+    "catalog":   { "status": "done", "artifact": "catalog.jsonl" }
   },
   "validation": {
-    "parse": { "passed": true, "checks": [ /* ... */ ] },
-    "chunk": { "passed": true, "checks": [ /* ... */ ] }
-  },
-  "cost": { "tokens_in": 12400, "tokens_out": 3200, "usd_estimate": 0.09 }
+    "chunk":     { "passed": true, "checks": [ /* ... */ ] },
+    "summarize": { "passed": true, "checks": [ /* ... */ ] }
+  }
 }
 ```
 
@@ -173,27 +205,49 @@ Minimum you must record per step:
 | # | Step | Depends on | Parallel group |
 |---|---|---|---|
 | 1 | `parse` | — | A |
-| 2 | `chunk` | parsed.json | B |
-| 3a | `summarize` | chunks.json | C |
-| 3b | `tagger` | chunks.json | C |
-| 4 | `embed` | chunks.json **+** tagged.json **+** summarized.json | D |
-| 5 | `index` | embedded.json | E |
+| 2 | **quality gate** | `parsed.json` verdict | B — you do it |
+| 3a | `summarize` | parsed.json | C |
+| 3b | `chunk` | parsed.json | C |
+| 4 | `tagger` | chunks.json | D — only if filtered retrieval is needed |
+| 5 | **catalogue** | doc-summary.json | E — you do it |
 
-**Parallel group C** is where you earn your keep: `summarize` and `tagger` both depend only on `chunks.json` and not on each other. Spawn both, wait for both.
+**Parallel group C is the one that matters.** `summarize` and `chunk` both read only `parsed.json` and neither reads the other. Both make LLM calls, so overlapping them is the largest wall-clock win in the pipeline.
 
-**Step 4 must wait for both C steps.** Tags and summaries are written into the vector payload. Embedding before they exist forces a second write pass.
+Note the dependency that changed: `summarize` now reads **`parsed.json`, not `chunks.json`**. It summarises the whole document, not the chunk set — so the two are genuinely independent rather than artificially sequenced.
+
+### Quality gate — the step people skip
+
+Between `parse` and the workers, read `verdict` from `parsed.json`:
+
+| verdict | Action |
+|---|---|
+| `ok` | proceed normally |
+| `degraded` | proceed, but record `degraded` in the catalogue `status` so it surfaces for spot-checking |
+| `unusable` | **stop for this document.** Write it to the review queue with the reasons. Do not run the workers |
+
+```
+if verdict == "unusable":
+    manifest.verdict = {...}
+    manifest.stages = {all downstream: skipped}
+    add to review_queue.jsonl
+    continue to next document
+```
+
+**Why this gate exists:** a scanned PDF with no OCR installed yields zero sections. Without the gate it flows into both workers, produces an empty summary and an empty chunk set, and lands in the catalogue looking like a normal document. **A document that looks fine and contains nothing is worse than one that visibly failed** — nobody ever investigates it.
 
 ### Deciding to skip steps
 
-Skip a step only on explicit policy, never on a whim:
+Skip only on explicit policy:
 
 | Step | Skip when |
 |---|---|
-| `summarize` | every document is short, or budget is exhausted |
-| `tagger` | the corpus has a single domain and no filtering need |
-| `graph` | no multi-hop queries are expected |
+| `tagger` | the corpus has a single domain and no filtered retrieval is needed |
+| `summarize` | **never** — see below |
+| `chunk` | **never** — it is the fine tier |
 
-If you are unsure, **run the step**. A missing summary is invisible; a wasted summary run is merely a line in the cost report.
+**`summarize` is not skippable.** It is tempting to drop it for short documents or to save cost, and it is always wrong: a document with no catalogue entry cannot be selected by a broad query at all. It is not deprioritised, it is invisible.
+
+If the budget genuinely cannot cover a summary for every document, **stop and report** rather than summarising a subset. A catalogue with holes is worse than an obviously incomplete run, because the holes are undetectable from the outside.
 
 ---
 
@@ -203,12 +257,12 @@ After each step, validate before scheduling the next one. A bad artifact propaga
 
 | Step | Minimum checks |
 |---|---|
-| `parse` | ≥ 1 section; `heading_path` present where the source has structure; `stats.warnings` reviewed |
-| `chunk` | no empty blocks; no split code fences or tables; every block within the token limit; `heading_path` preserved |
-| `summarize` | every block has a non-empty summary within the length cap |
-| `tagger` | every block has the required tag fields; all values are in the schema enums |
-| `embed` | vector dimension matches the model registry |
-| `index` | upsert count equals the embedded count |
+| `parse` | ≥ 1 section; `heading_path` present where the source has structure; `verdict` read |
+| `chunk` | `source_id` matches `parsed.json`; no empty blocks; no split code fences or tables; `chunk_id` unique; `chunk_index` contiguous; `heading_path` is a list |
+| `summarize` | `source_id` matches; `title` present; `summary` non-empty; `token_count` ≤ budget; 2–5 `topics` |
+| `tagger` | every chunk has the required tag fields; all values are in the schema enums |
+
+**The `source_id` cross-check is not optional.** If a worker mangles it, the document is selectable via the catalogue and then unreachable by chunk search. That failure is silent — every individual artefact looks valid.
 
 On failure: **send the step back to its worker with the failure detail**, up to 2 retries. After that, mark the document failed, record why, and move to the next document. One bad document must never stall a batch.
 
@@ -250,12 +304,14 @@ Report failures with the step name and the worker's error text. "3 documents fai
 
 | Symptom | Likely cause | Your action |
 |---|---|---|
-| Parse Worker reports a missing dependency | Engine not installed | Report the exact `pip install` line; do not retry |
-| Parse Worker returns 0 sections | Scanned document, OCR unavailable | Report; this document cannot be ingested |
+| `parse` reports a missing dependency | Engine not installed | Record `unusable` with the exact `pip install` line; do not retry |
+| `parse` returns 0 sections | Scanned document, OCR unavailable | Quality gate stops it; add to review queue |
+| `verdict` is `degraded` | OCR ran, or a table failed, or cleaning removed a lot | Proceed, but mark the catalogue entry `degraded` for spot-checking |
 | Chunk validation fails twice | Document structure the policy does not cover | Mark failed, record the structure, flag for policy review |
 | Summarize Worker hits rate limits | Concurrency too high | Reduce parallelism; retry with backoff |
-| Embed dimension mismatch | Corpus policy changed model mid-run | Stop. This is a configuration bug, not a document bug |
-| Index count < embed count | Partial upsert | Re-run `index` only — it is idempotent |
+| Summary exceeds the token budget | Worker ignored the ceiling | Send back with the ceiling restated; if it recurs, the ceiling is wrong for this corpus — raise it rather than letting entries drift over |
+| `source_id` mismatch between summary and chunks | A worker mangled the field | Send back to that worker. **Do not proceed** — this breaks the two-stage path silently |
+| Two documents write to the same run directory | `source_id` collision | Stop. Derive `source_id` from the source path; collisions mean the derivation is broken |
 
 ---
 
@@ -264,11 +320,13 @@ Report failures with the step name and the worker's error text. "3 documents fai
 | Never | Why |
 |---|---|
 | Decide a chunk size | That is Chunk Worker's judgment, bounded by corpus policy |
-| Invent tag dimensions | Schema is a corpus-level asset, owned by Tagger Worker + policy |
+| Invent tag dimensions | Schema is a corpus-level asset, owned by the Tagger Worker + policy |
 | Read a worker's manual | Pollutes your context with knowledge you must not act on |
 | Reuse a worker's session for another document | Context from the previous document leaks into the next |
 | Continue after a failed validation gate | Garbage propagates; failures get more expensive downstream |
-| Silently drop a step to save budget | Produces an inconsistent corpus with no record of why |
+| Skip `summarize` to save budget | A document with no catalogue entry is unfindable, not just deprioritised |
+| Proceed past a `source_id` mismatch | Breaks the coarse→fine path invisibly; every artefact still looks valid |
+| Schedule `embed` or `index` | Out of scope. Report the corpus as ready instead |
 
 ---
 
@@ -276,4 +334,6 @@ Report failures with the step name and the worker's error text. "3 documents fai
 
 You are a scheduler with a manifest. Your value is **ordering, parallelism, validation, and resumability** — not expertise in any single step.
 
-The moment you start reasoning about chunk granularity or tag enums, you have stopped being the orchestrator and become a worse version of a worker. Stay ignorant of the details, and be rigorous about the contract.
+Everything you schedule exists to serve two consumers: an agent asking a broad question who reads the **catalogue**, and an agent asking a specific one who searches **chunks**. A document missing from either is lost — and lost silently, because every artefact that does exist will look correct.
+
+The moment you start reasoning about chunk granularity or summary wording, you have stopped being the orchestrator and become a worse version of a worker. Stay ignorant of the details, and be rigorous about the contract.

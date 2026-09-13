@@ -87,6 +87,12 @@ def _parse_one(source: str, args: argparse.Namespace) -> dict:
         enabled = args.cleaners.split(",") if args.cleaners else None
         result = clean_result(result, clean_options, enabled)
 
+    # Classify the extraction. This is the routing signal the orchestrator
+    # branches on — a parse can fail silently (a scan with no OCR engine yields
+    # zero sections and no exception), and an empty document that looks valid is
+    # worse than one that visibly failed.
+    result.decide_verdict()
+
     return json.loads(result.to_json())
 
 
@@ -147,9 +153,15 @@ def run(args: argparse.Namespace) -> None:
             successes.append(payload)
             n_sections = len(payload.get("sections", []))
             engine = payload.get("stats", {}).get("parser_engine_used", "?")
+            verdict = payload.get("verdict", "?")
             warn = payload.get("stats", {}).get("warnings", [])
             suffix = f" ({len(warn)} warning(s))" if warn else ""
-            print(f"[parse]   ok — {n_sections} blocks via {engine}{suffix}", file=sys.stderr)
+            print(
+                f"[parse]   {verdict} — {n_sections} blocks via {engine}{suffix}",
+                file=sys.stderr,
+            )
+            for r in payload.get("verdict_reasons", []):
+                print(f"[parse]   reason: {r}", file=sys.stderr)
             for w in warn:
                 print(f"[parse]   warn: {w}", file=sys.stderr)
         except MissingDependencyError as e:
