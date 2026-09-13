@@ -39,19 +39,49 @@ ragcli embed --help
 
 ## 工具速查表
 
-| 工具 | 功能 | 输入 | 输出 | 关键参数 |
-| --- | --- | --- | --- | --- |
-| `chunk` | 文档切块 | `-f/--input` 文件路径 | JSON chunks 数组 | `--chunk-size`, `--chunk-overlap`, `--format` |
-| `embed` | 生成 embedding | `-i` JSON chunks | JSON with `embedding` field | `--model`, `--api local|openai` |
-| `index` | 构建向量索引 | `-i` embedded chunks | JSON status | `--store chroma/qdrant/milvus`, `--collection` |
-| `search` | 向量检索 | `-q` 查询字符串 | JSON matches | `--store`, `--collection`, `-k` top-k |
-| `hybrid` | 混合检索(向量+BM25) | `-q` + `-i` embedded | JSON with RRF scores | `--bm25-weight`, `--vector-weight` |
-| `rerank` | Cross-Encoder 重排序 | `-q` + `-i` results | JSON re-ranked | `--model`, `--backend flag|st` |
-| `summarize` | 摘要生成 | `-i` chunks | JSON with `summary` | `--model`, `--local` |
-| `tagger` | 自动标签打标 | `-i` chunks + `--schema` | JSON with `tags` | `--schema` (file or JSON string) |
-| `evaluate` | RAG Triad 评估 | `-g` golden + `-r` results | JSON metrics | `--model` judge model |
-| `cache` | 语义缓存 | `-q` query | hit/miss JSON | `--store`, `--threshold` |
-| `graph` | 知识图谱构建 | `-i` tagged chunks | JSON nodes+edges | `--model` |
+| 工具 | 阶段 | 功能 | 输入 | 输出 | 关键参数 |
+| --- | --- | --- | --- | --- | --- |
+| `parse` | ingest | **解析任意格式** | 文件/目录/URL | 标准 JSON 契约 | `-f` 单文件, `-d` 目录, `--list-formats` |
+| `chunk` | ingest | 文档切块 | `-i` parsed JSON | JSON chunks 数组 | `--chunk-size`, `--chunk-overlap`, `--format` |
+| `summarize` | ingest | 摘要生成 | `-i` chunks | JSON with `summary` | `--model`, `--local` |
+| `tagger` | ingest | 自动标签打标 | `-i` chunks + `--schema` | JSON with `tags` | `--schema` (file or JSON string) |
+| `embed` | index | 生成 embedding | `-i` JSON chunks | JSON with `embedding` field | `--model`, `--api local\|openai` |
+| `index` | index | 构建向量索引 | `-i` embedded chunks | JSON status | `--store chroma/qdrant/milvus`, `--collection` |
+| `graph` | index | 知识图谱构建 | `-i` tagged chunks | JSON nodes+edges | `--model` |
+| `search` | retrieve | 向量检索 | `-q` 查询字符串 | JSON matches | `--store`, `--collection`, `-k` top-k |
+| `hybrid` | retrieve | 混合检索(向量+BM25) | `-q` + `-i` embedded | JSON with RRF scores | `--bm25-weight`, `--vector-weight` |
+| `rerank` | retrieve | Cross-Encoder 重排序 | `-q` + `-i` results | JSON re-ranked | `--model`, `--backend flag\|st` |
+| `cache` | retrieve | 语义缓存 | `-q` query | hit/miss JSON | `--store`, `--threshold` |
+| `evaluate` | evaluate | RAG Triad 评估 | `-g` golden + `-r` results | JSON metrics | `--model` judge model |
+
+用 `ragcli list --stage ingest` 只看预处理阶段的工具，或用 `ragcli stages` 看完整阶段分组。
+
+---
+
+## 关于 `parse` 的输出契约
+
+`parse` 是唯一处理文件格式的工具。它的输出被下游所有工具消费，结构永远一致：
+
+```jsonc
+{
+  "source_id": "report_a1b2c3d4",       // 稳定 ID
+  "format_type": "pdf",
+  "meta": {"title": "...", "page_count": 12},
+  "sections": [
+    {
+      "block_id": 2,
+      "type": "paragraph",                // heading|paragraph|table|list_item|code_block
+      "heading_path": ["第一章", "1.1 概述"],  // 面包屑 —— 切块时前置给 chunk
+      "content": "正文...",
+      "location": {"page": 3}             // 溯源
+    }
+  ],
+  "stats": {"parser_engine_used": "pdfplumber", "warnings": [], "cleaning": {...}}
+}
+```
+
+**切块时务必把 `heading_path` 前置到 chunk 里**——这是让 chunk 独立可回答的关键。
+详见 [chunk-expert.md](chunk-expert.md)。
 
 ---
 
@@ -60,8 +90,12 @@ ragcli embed --help
 ### 管线 A：基础 RAG（最快上手）
 
 ```bash
+# Step 0: 解析任意格式（PDF/Word/Excel/网页/图片都走这一步）
+ragcli parse -f documents.pdf -o parsed.json
+# 或批量：ragcli parse -d ./raw/ -o parsed.jsonl
+
 # Step 1: 切块
-ragcli chunk -f documents.pdf -o chunks.json
+ragcli chunk -i parsed.json -o chunks.json
 
 # Step 2: Embedding
 ragcli embed -i chunks.json -o embedded.json
@@ -71,25 +105,24 @@ ragcli index -i embedded.json -d chroma --collection my_docs
 
 # Step 4: 检索
 ragcli search -q "你的问题" -d chroma --collection my_docs -k 5 > results.json
-
-# Step 5: 用结果生成回答（交给 LLM）
-cat results.json | ragcli generate-answer --prompt "基于以下结果回答问题..."
 ```
 
 ### 管线 B：增强 RAG（高精度）
 
 ```bash
+# 解析
+ragcli parse -d ./knowledge-base/ -o parsed.jsonl
+
 # 切块
-ragcli chunk -f documents.pdf -o chunks.json
+ragcli chunk -i parsed.jsonl -o chunks.json
 
-# 生成摘要
-ragcli summarize -i chunks.json -o summarized.json
-
-# 打标签
+# 摘要 + 打标（这两步可以并行）
+ragcli summarize -i chunks.json -o summarized.json &
 ragcli tagger -i chunks.json -o tagged.json \
-    --schema '{"domain":["finance","legal","tech"],"doc_type":["policy","faq","tutorial"]}'
+    --schema '{"domain":["finance","legal","tech"],"doc_type":["policy","faq","tutorial"]}' &
+wait
 
-# Embedding（同时嵌入原文和摘要）
+# Embedding
 ragcli embed -i tagged.json -o embedded.json
 
 # 混合检索
@@ -97,9 +130,6 @@ ragcli hybrid -q "你的问题" -i embedded.json -k 20 > hybrid_results.json
 
 # 重排序
 ragcli rerank -q "你的问题" -i hybrid_results.json -o reranked.json -k 5
-
-# 检索结果给 LLM 生成回答
-cat reranked.json | ... # 拼接 prompt 调用 LLM
 ```
 
 ### 管线 C：带评估的迭代优化
